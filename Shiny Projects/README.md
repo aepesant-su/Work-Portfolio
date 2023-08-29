@@ -1,0 +1,1 @@
+This project pulls live data from the MLB the Show 22 diamondy dynasty marketplace. It created an app that shows what Players are selling that fastest as well as what players you can buy and sell to make the most profit.
