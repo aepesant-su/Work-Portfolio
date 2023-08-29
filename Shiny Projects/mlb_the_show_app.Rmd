@@ -1,0 +1,67 @@
+---
+title: "MLB_Market"
+output: html_document
+runtime: shiny
+---
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(httr)
+library(jsonlite)
+library(tidyverse)
+library(lubridate)
+
+#getting total number of pages
+
+page = GET(paste0("https://mlb22.theshow.com/apis/listings.json?page=1"))
+page_dat = fromJSON(rawToChar(page$content))
+total_pages <- page_dat$total_pages
+
+#brings up profits
+
+sales_all <- vector("list", length = total_pages)
+for (i in 1:total_pages) {
+  res = GET(paste0("https://mlb22.theshow.com/apis/listings.json?page=",i,""))
+  data = fromJSON(rawToChar(res$content))
+  sales <- data$listings
+  sales$uuid <- sales$item$uuid
+  sales <- sales %>% dplyr::select(listing_name, best_buy_price,best_sell_price,uuid)
+  sales$profit <- (-sales$best_buy_price) + (sales$best_sell_price - (sales$best_sell_price*.1))
+  sales_all[[i]] <- sales
+}
+final_sales <- do.call(rbind, sales_all)
+
+#set minimum profit you want to look at
+profits <- final_sales %>% filter(profit > 500)
+
+#getting sales per minute
+uuids <- as.list(profits$uuid)
+sales_min <- vector("list", length = length(uuids))
+for (k in uuids) {
+  res1 = GET(paste0("https://mlb22.theshow.com/apis/listing.json?uuid=",k,""))
+  data1 = fromJSON(rawToChar(res1$content))
+  order_complete <- data1$completed_orders
+  order_complete <- order_complete %>% mutate(date = mdy_hms(date))
+  spm <- 50/as.numeric(difftime(order_complete$date[1], order_complete$date[50], units = "mins"))
+  sales_min[[k]] <- cbind(spm,k)
+}
+rate_of_sale <- do.call(rbind, sales_min)
+rate_of_sale <- as.data.frame(rate_of_sale)
+
+#joining data sets
+
+full_data <- left_join(rate_of_sale, final_sales, by = c("k" = "uuid"))
+names(full_data)[2] <- "uuid"
+full_data <- full_data[, c(3, 6, 1, 4, 5, 2)]
+names(full_data)[1] <- "player"
+names(full_data)[4] <- "buy_order"
+names(full_data)[5] <- "sell_order"
+full_data$buy_500 <- (full_data$sell_order - (full_data$sell_order*.1)) - 500
+full_data <- full_data[, c(1, 2, 3, 4, 5, 7, 6)]
+full_data <- full_data %>% filter(buy_order != 0)
+full_data <- full_data[order(full_data$spm, decreasing = TRUE),]
+full_data <- full_data %>% select(-uuid)
+full_data$spm <- as.numeric(full_data$spm)
+full_data$spm <- round(full_data$spm, digits = 4)
+full_data <- full_data %>% select(player, profit, spm)
+full_data
+```
