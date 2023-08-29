@@ -1,0 +1,12 @@
+name: Demo
+title: Demo
+username:
+account: aepesant
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 2130744
+bundleId: 3045725
+url: https://aepesant.shinyapps.io/Demo/
+when: 1587494021.99406
+asMultiple: FALSE
+asStatic: FALSE
