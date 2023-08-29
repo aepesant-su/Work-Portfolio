@@ -1,0 +1,2313 @@
+---
+title: "NFL BIG DATA BOWL"
+output: html_document
+---
+
+#necessary packages
+```{r}
+library(tidyverse)
+library(lubridate) 
+library(beeswarm) 
+library(gganimate)
+library(ggridges)  
+library(tidyr)
+library(cowplot)
+```
+
+#to animate play
+```{r}
+play <- tracking2018 %>% filter(FinalID == 2018100709383)
+
+
+## General field boundaries
+xmin <- 0
+xmax <- 160/3
+hash.right <- 38.35
+hash.left <- 12
+hash.width <- 3.3
+
+
+## Specific boundaries for a given play
+ymin <- max(round(min(play$x, na.rm = TRUE) - 10, -1), 0)
+ymax <- min(round(max(play$x, na.rm = TRUE) + 10, -1), 120)
+df_hash <- expand.grid(x = c(0, 23.36667, 29.96667, xmax), y = (10:110))
+df_hash <- df_hash %>% filter(!(floor(y %% 5) == 0))
+df_hash <- df_hash %>% filter(y < ymax, y > ymin)
+
+animate_play <- ggplot() +
+  scale_size_manual(values = c(6, 4, 6), guide = FALSE) + 
+  scale_shape_manual(values = c(21, 16, 21), guide = FALSE) +
+  scale_fill_manual(values = c("#e31837", "#654321", "#002244"), guide = FALSE) + 
+  scale_colour_manual(values = c("black", "#654321", "#c60c30"), guide = FALSE) + 
+  annotate("text", x = df_hash$x[df_hash$x < 55/2], 
+           y = df_hash$y[df_hash$x < 55/2], label = "_", hjust = 0, vjust = -0.2) + 
+  annotate("text", x = df_hash$x[df_hash$x > 55/2], 
+           y = df_hash$y[df_hash$x > 55/2], label = "_", hjust = 1, vjust = -0.2) + 
+  annotate("segment", x = xmin, 
+           y = seq(max(10, ymin), min(ymax, 110), by = 5), 
+           xend =  xmax, 
+           yend = seq(max(10, ymin), min(ymax, 110), by = 5)) + 
+  annotate("text", x = rep(hash.left, 11), y = seq(10, 110, by = 10), 
+           label = c("G   ", seq(10, 50, by = 10), rev(seq(10, 40, by = 10)), "   G"), 
+           angle = 270, size = 4) + 
+  annotate("text", x = rep((xmax - hash.left), 11), y = seq(10, 110, by = 10), 
+           label = c("   G", seq(10, 50, by = 10), rev(seq(10, 40, by = 10)), "G   "), 
+           angle = 90, size = 4) + 
+  annotate("segment", x = c(xmin, xmin, xmax, xmax), 
+           y = c(ymin, ymax, ymax, ymin), 
+           xend = c(xmin, xmax, xmax, xmin), 
+           yend = c(ymax, ymax, ymin, ymin), colour = "black") + 
+  geom_point(data = play, aes(x = (xmax-y), y = x, shape = team,
+                              fill = team, group = nflId, size = team, colour = team), alpha = 0.7) + 
+  geom_text(data = play, aes(x = (xmax-y), y = x, label = jerseyNumber), colour = "white", 
+            vjust = 0.36, size = 3.5) + 
+  ylim(ymin, ymax) + 
+  coord_fixed() +  
+  theme_nothing() + 
+  transition_time(frameId)  +
+  ease_aes('linear') + 
+  NULL
+
+## Ensure timing of play matches 10 frames-per-second
+play.length.ex <- length(unique(play$frameId))
+
+#to animate play
+animate(animate_play, fps = 10, nframe = play.length.ex)
+```
+
+#loading in tracking data
+```{r}
+tracking2020 <- read_csv('tracking2020.csv')
+tracking2019 <- read_csv('tracking2019.csv')
+tracking2018 <- read_csv('tracking2018.csv')
+
+tracking2020$FinalID <- paste0(tracking2020$gameId, tracking2020$playId)
+tracking2019$FinalID <- paste0(tracking2019$gameId, tracking2019$playId)
+tracking2018$FinalID <- paste0(tracking2018$gameId, tracking2018$playId)
+
+```
+
+#loading in other data
+```{r}
+games <- read_csv('games.csv')
+PFF <- read_csv('PFFScoutingData.csv')
+players <- read_csv('players.csv')
+plays <- read_csv('plays.csv')
+```
+
+#keeping punt plays
+```{r}
+plays_punt <- plays %>% filter(specialTeamsPlayType == 'Punt')
+
+plays_punt$FinalID <- paste0(plays_punt$gameId, plays_punt$playId)
+```
+
+
+#2020 Gunner and Vises Max Speeds
+```{r}
+#using df_tracking to merge to jersey numbers
+df_jerseyMap <- tracking2020 %>% 
+  
+  #selecting variables of interest
+  select(gameId, team, jerseyNumber, nflId) %>%
+  
+  #dropping duplicates - jersey # is constant throughout game
+  distinct() %>%
+  
+  #joining to games
+  inner_join(games, by = 'gameId') %>%
+  
+  #getting name of team
+  mutate(team = ifelse(team == 'home', homeTeamAbbr, visitorTeamAbbr),
+         
+         #adjusting jersey number so that it includes 0 when < 10
+         jerseyNumber = ifelse(jerseyNumber < 10,
+                               paste0('0', jerseyNumber),
+                               as.character(jerseyNumber)),
+         
+         #getting team and jersey
+         teamJersey = paste0(team, ' ', jerseyNumber)) %>%
+  
+  #map to merge nflId to teamJersey
+  select(gameId, nflId, teamJersey) %>%
+  
+  arrange(gameId, nflId, teamJersey)
+```
+
+Gunners 2020
+```{r}
+###Gunner
+df_PFF_specialGunners <- PFF %>%
+  
+  #splitting into a column for each special teams gunner
+  separate(gunners, sep = '; ', into = c("teamJersey1",
+                                                      "teamJersey2",
+                                                      "teamJersey3",
+                                                      "teamJersey4",
+                                                      "teamJersey5",
+                                                      "teamJersey6",
+                                                      "teamJersey7",
+                                                      "teamJersey8",
+                                                      "teamJersey9",
+                                                      "teamJersey10",
+                                                      "teamJersey11")) %>%
+  
+  
+  #selecting jersey numbers for each team
+  select(gameId, playId, teamJersey1, teamJersey2,
+         teamJersey3, teamJersey4, teamJersey5,
+         teamJersey6, teamJersey7, teamJersey8,
+         teamJersey9, teamJersey10, teamJersey11) %>%
+  
+  #gathering data
+  gather(key = 'Type', value = 'teamJersey', -gameId, -playId) %>%
+  
+  #dropping NA rows
+  drop_na() %>%
+  
+  #joining to jersey map
+  inner_join(df_jerseyMap, by = c("gameId", 'teamJersey')) %>%
+  
+  #selecting variables of interest
+  select(gameId, playId, nflId) %>%
+  
+  arrange(gameId, playId, nflId)
+```
+
+Vises 2020
+```{r}
+###Vises
+
+df_PFF_specialVises <- PFF %>%
+  
+  #splitting into a column for each special teams vise
+  separate(vises, sep = '; ', into = c("teamJersey1",
+                                         "teamJersey2",
+                                         "teamJersey3",
+                                         "teamJersey4",
+                                         "teamJersey5",
+                                         "teamJersey6",
+                                         "teamJersey7",
+                                         "teamJersey8",
+                                         "teamJersey9",
+                                         "teamJersey10",
+                                         "teamJersey11")) %>%
+  
+  
+  #selecting jersey numbers for each team
+  select(gameId, playId, teamJersey1, teamJersey2,
+         teamJersey3, teamJersey4, teamJersey5,
+         teamJersey6, teamJersey7, teamJersey8,
+         teamJersey9, teamJersey10, teamJersey11) %>%
+  
+  #gathering data
+  gather(key = 'Type', value = 'teamJersey', -gameId, -playId) %>%
+  
+  #dropping NA rows
+  drop_na() %>%
+  
+  #joining to jersey map
+  inner_join(df_jerseyMap, by = c("gameId", 'teamJersey')) %>%
+  
+  #selecting variables of interest
+  select(gameId, playId, nflId) %>%
+  
+  arrange(gameId, playId, nflId)
+```
+
+
+finding out the average time of when ball lands on punts
+```{r}
+#events are punt_received, punt_land, and fair_catch
+
+events <- c("punt_received", "punt_land","fair_catch")
+
+tracking20test <- tracking2020 %>% select(gameId, playId, nflId, event, frameId) %>% distinct() %>% filter(event %in% events)
+tracking19test <- tracking2019 %>% select(gameId, playId, nflId, event, frameId) %>% distinct() %>% filter(event %in% events)
+tracking18test <- tracking2018 %>% select(gameId, playId, nflId, event, frameId) %>% distinct() %>% filter(event %in% events)
+
+frame_avg <- rbind(tracking20test,tracking19test,tracking18test)
+
+summary(frame_avg)
+
+frame_cut_off <- 80 + (1.5*6)
+frame_cut_off
+```
+
+getting max speeds for gunners before start of punt return 2020
+```{r}
+df_maxSpeeds <- tracking2020 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners
+  inner_join(df_PFF_specialGunners, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId,
+         
+         #player is on home team and kicking team is home
+         ((team == 'home') & (possessionTeam == homeTeamAbbr)) |
+           ((team == 'away') & (possessionTeam == visitorTeamAbbr))  ) %>%
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #grouping by gameId, playId and nflId
+  group_by(gameId, playId, nflId) %>%
+  
+  #filtering for first 89 observations
+  filter(row_number() <= 89) %>%
+  
+  #calculating max speed for given play / player
+  summarize(maxSpeed = max(s, na.rm = T), .groups = 'keep' ) %>%
+  
+  #ungrouping
+  ungroup()
+
+```
+
+
+getting max speeds for vises before start of punt return 2020
+```{r}
+df_maxSpeeds_vises <- tracking2020 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners
+  inner_join(df_PFF_specialVises, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  filter(kickerId != nflId) %>%
+         #((team == "home") & (possessionTeam == homeTeamAbbr)) |
+           #((team == "away") & (possessionTeam == visitorTeamAbbr))) 
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #grouping by gameId, playId and nflId
+  group_by(gameId, playId, nflId) %>%
+  
+  #filtering for first 89 observations
+  filter(row_number() <= 89) %>%
+  
+  #calculating max speed for given play / player
+  summarize(maxSpeed = max(s, na.rm = T), .groups = 'keep') %>%
+  
+  #ungrouping
+  ungroup()
+
+```
+
+#2019 Gunner and Vises Max Speeds
+```{r}
+#using df_tracking to merge to jersey numbers
+df_jerseyMap19 <- tracking2019 %>% 
+  
+  #selecting variables of interest
+  select(gameId, team, jerseyNumber, nflId) %>%
+  
+  #dropping duplicates - jersey # is constant throughout game
+  distinct() %>%
+  
+  #joining to games
+  inner_join(games, by = 'gameId') %>%
+  
+  #getting name of team
+  mutate(team = ifelse(team == 'home', homeTeamAbbr, visitorTeamAbbr),
+         
+         #adjusting jersey number so that it includes 0 when < 10
+         jerseyNumber = ifelse(jerseyNumber < 10,
+                               paste0('0', jerseyNumber),
+                               as.character(jerseyNumber)),
+         
+         #getting team and jersey
+         teamJersey = paste0(team, ' ', jerseyNumber)) %>%
+  
+  #map to merge nflId to teamJersey
+  select(gameId, nflId, teamJersey) %>%
+  
+  arrange(gameId, nflId, teamJersey)
+```
+
+Gunners 2019
+```{r}
+###Gunner
+df_PFF_specialGunners19 <- PFF %>%
+  
+  #splitting into a column for each special teams gunner
+  separate(gunners, sep = '; ', into = c("teamJersey1",
+                                                      "teamJersey2",
+                                                      "teamJersey3",
+                                                      "teamJersey4",
+                                                      "teamJersey5",
+                                                      "teamJersey6",
+                                                      "teamJersey7",
+                                                      "teamJersey8",
+                                                      "teamJersey9",
+                                                      "teamJersey10",
+                                                      "teamJersey11")) %>%
+  
+  
+  #selecting jersey numbers for each team
+  select(gameId, playId, teamJersey1, teamJersey2,
+         teamJersey3, teamJersey4, teamJersey5,
+         teamJersey6, teamJersey7, teamJersey8,
+         teamJersey9, teamJersey10, teamJersey11) %>%
+  
+  #gathering data
+  gather(key = 'Type', value = 'teamJersey', -gameId, -playId) %>%
+  
+  #dropping NA rows
+  drop_na() %>%
+  
+  #joining to jersey map
+  inner_join(df_jerseyMap19, by = c("gameId", 'teamJersey')) %>%
+  
+  #selecting variables of interest
+  select(gameId, playId, nflId) %>%
+  
+  arrange(gameId, playId, nflId)
+```
+
+Vises 2019
+```{r}
+###Vises
+
+df_PFF_specialVises19 <- PFF %>%
+  
+  #splitting into a column for each special teams vise
+  separate(vises, sep = '; ', into = c("teamJersey1",
+                                         "teamJersey2",
+                                         "teamJersey3",
+                                         "teamJersey4",
+                                         "teamJersey5",
+                                         "teamJersey6",
+                                         "teamJersey7",
+                                         "teamJersey8",
+                                         "teamJersey9",
+                                         "teamJersey10",
+                                         "teamJersey11")) %>%
+  
+  
+  #selecting jersey numbers for each team
+  select(gameId, playId, teamJersey1, teamJersey2,
+         teamJersey3, teamJersey4, teamJersey5,
+         teamJersey6, teamJersey7, teamJersey8,
+         teamJersey9, teamJersey10, teamJersey11) %>%
+  
+  #gathering data
+  gather(key = 'Type', value = 'teamJersey', -gameId, -playId) %>%
+  
+  #dropping NA rows
+  drop_na() %>%
+  
+  #joining to jersey map
+  inner_join(df_jerseyMap19, by = c("gameId", 'teamJersey')) %>%
+  
+  #selecting variables of interest
+  select(gameId, playId, nflId) %>%
+  
+  arrange(gameId, playId, nflId)
+```
+
+getting max speeds for gunners before start of punt return 2019
+```{r}
+df_maxSpeeds19 <- tracking2019 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners
+  inner_join(df_PFF_specialGunners19, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId,
+         
+         #player is on home team and kicking team is home
+         ((team == 'home') & (possessionTeam == homeTeamAbbr)) |
+           ((team == 'away') & (possessionTeam == visitorTeamAbbr))  ) %>%
+
+  #ungrouping
+  ungroup() %>%
+  
+  #grouping by gameId, playId and nflId
+  group_by(gameId, playId, nflId) %>%
+  
+  #filtering for first 89 observations
+  filter(row_number() <= 89) %>%
+  
+  #calculating max speed for given play / player
+  summarize(maxSpeed = max(s, na.rm = T), .groups = 'keep') %>%
+  
+  #ungrouping
+  ungroup()
+```
+
+getting max speeds for vises before start of punt return 2019
+```{r}
+df_maxSpeeds_vises19 <- tracking2019 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners
+  inner_join(df_PFF_specialVises19, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  filter(kickerId != nflId) %>%
+         #((team == "home") & (possessionTeam == homeTeamAbbr)) |
+           #((team == "away") & (possessionTeam == visitorTeamAbbr))) 
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #grouping by gameId, playId and nflId
+  group_by(gameId, playId, nflId) %>%
+  
+  #filtering for first 89 observations
+  filter(row_number() <= 89) %>%
+  
+  #calculating max speed for given play / player
+  summarize(maxSpeed = max(s, na.rm = T), .groups = 'keep') %>%
+  
+  #ungrouping
+  ungroup()
+
+```
+
+
+#2018 Gunner and Vises Max Speeds
+```{r}
+#using df_tracking to merge to jersey numbers
+df_jerseyMap18 <- tracking2018 %>% 
+  
+  #selecting variables of interest
+  select(gameId, team, jerseyNumber, nflId) %>%
+  
+  #dropping duplicates - jersey # is constant throughout game
+  distinct() %>%
+  
+  #joining to games
+  inner_join(games, by = 'gameId') %>%
+  
+  #getting name of team
+  mutate(team = ifelse(team == 'home', homeTeamAbbr, visitorTeamAbbr),
+         
+         #adjusting jersey number so that it includes 0 when < 10
+         jerseyNumber = ifelse(jerseyNumber < 10,
+                               paste0('0', jerseyNumber),
+                               as.character(jerseyNumber)),
+         
+         #getting team and jersey
+         teamJersey = paste0(team, ' ', jerseyNumber)) %>%
+  
+  #map to merge nflId to teamJersey
+  select(gameId, nflId, teamJersey) %>%
+  
+  arrange(gameId, nflId, teamJersey)
+```
+
+Gunners 2018
+```{r}
+###Gunner
+df_PFF_specialGunners18 <- PFF %>%
+  
+  #splitting into a column for each special teams gunner
+  separate(gunners, sep = '; ', into = c("teamJersey1",
+                                                      "teamJersey2",
+                                                      "teamJersey3",
+                                                      "teamJersey4",
+                                                      "teamJersey5",
+                                                      "teamJersey6",
+                                                      "teamJersey7",
+                                                      "teamJersey8",
+                                                      "teamJersey9",
+                                                      "teamJersey10",
+                                                      "teamJersey11")) %>%
+  
+  
+  #selecting jersey numbers for each team
+  select(gameId, playId, teamJersey1, teamJersey2,
+         teamJersey3, teamJersey4, teamJersey5,
+         teamJersey6, teamJersey7, teamJersey8,
+         teamJersey9, teamJersey10, teamJersey11) %>%
+  
+  #gathering data
+  gather(key = 'Type', value = 'teamJersey', -gameId, -playId) %>%
+  
+  #dropping NA rows
+  drop_na() %>%
+  
+  #joining to jersey map
+  inner_join(df_jerseyMap18, by = c("gameId", 'teamJersey')) %>%
+  
+  #selecting variables of interest
+  select(gameId, playId, nflId) %>%
+  
+  arrange(gameId, playId, nflId)
+```
+
+Vises 2018
+```{r}
+###Vises
+
+df_PFF_specialVises18 <- PFF %>%
+  
+  #splitting into a column for each special teams vise
+  separate(vises, sep = '; ', into = c("teamJersey1",
+                                         "teamJersey2",
+                                         "teamJersey3",
+                                         "teamJersey4",
+                                         "teamJersey5",
+                                         "teamJersey6",
+                                         "teamJersey7",
+                                         "teamJersey8",
+                                         "teamJersey9",
+                                         "teamJersey10",
+                                         "teamJersey11")) %>%
+  
+  
+  #selecting jersey numbers for each team
+  select(gameId, playId, teamJersey1, teamJersey2,
+         teamJersey3, teamJersey4, teamJersey5,
+         teamJersey6, teamJersey7, teamJersey8,
+         teamJersey9, teamJersey10, teamJersey11) %>%
+  
+  #gathering data
+  gather(key = 'Type', value = 'teamJersey', -gameId, -playId) %>%
+  
+  #dropping NA rows
+  drop_na() %>%
+  
+  #joining to jersey map
+  inner_join(df_jerseyMap18, by = c("gameId", 'teamJersey')) %>%
+  
+  #selecting variables of interest
+  select(gameId, playId, nflId) %>%
+  
+  arrange(gameId, playId, nflId)
+```
+
+getting max speeds for gunners before start of punt return 2018
+```{r}
+df_maxSpeeds18 <- tracking2018 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners
+  inner_join(df_PFF_specialGunners18, df_PFF_specialVises18, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId,
+         
+         #player is on home team and kicking team is home
+         ((team == 'home') & (possessionTeam == homeTeamAbbr)) |
+           ((team == 'away') & (possessionTeam == visitorTeamAbbr))  ) %>%
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #grouping by gameId, playId and nflId
+  group_by(gameId, playId, nflId) %>%
+  
+  #filtering for first 89 observations
+  filter(row_number() <= 89) %>%
+  
+  #calculating max speed for given play / player
+  summarize(maxSpeed = max(s, na.rm = T), .groups = 'keep') %>%
+  
+  #ungrouping
+  ungroup()
+```
+
+getting max speeds for vises before start of punt return 2018
+```{r}
+df_maxSpeeds_vises18 <- tracking2018 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners
+  inner_join(df_PFF_specialVises18, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  filter(kickerId != nflId) %>%
+         #((team == "home") & (possessionTeam == homeTeamAbbr)) |
+           #((team == "away") & (possessionTeam == visitorTeamAbbr))) 
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #grouping by gameId, playId and nflId
+  group_by(gameId, playId, nflId) %>%
+  
+  #filtering for first 89 observations
+  filter(row_number() <= 89) %>%
+  
+  #calculating max speed for given play / player
+  summarize(maxSpeed = max(s, na.rm = T), .groups = 'keep') %>%
+  
+  #ungrouping
+  ungroup()
+
+```
+
+#Combining datasets to create a dataframe with the max speed of every of every gunner on every punt return for the years 2018, 2019, and 2021
+
+```{r}
+gunner_speeds <- rbind(df_maxSpeeds, df_maxSpeeds19, df_maxSpeeds18)
+
+vise_speeds <- rbind(df_maxSpeeds_vises, df_maxSpeeds_vises19, df_maxSpeeds_vises18)
+
+
+#write_csv(gunner_speeds, 'gunner_speeds.csv')
+
+#write_csv(vise_speeds, 'vise_speeds.csv')
+
+```
+
+
+#Comparing Gunner vs Vises Location
+
+merging 2018 data frames
+```{r}
+
+gunner18 <- tracking2018 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialGunners18, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #filter to just looking at locations at snap of the ball
+  
+  filter(event == 'ball_snap')
+
+gunner18$gunner <- 1
+gunner18$vise <- 0
+
+vise18 <- tracking2018 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialVises18, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #filter to just looking at locations at snap of the ball
+  
+  filter(event == 'ball_snap')
+
+vise18$gunner <- 0
+vise18$vise <- 1
+
+gunner_vise18 <- rbind(gunner18, vise18)
+
+```
+
+
+merging 2019 data frames
+```{r}
+
+gunner19 <- tracking2019 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialGunners19, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #filter to just looking at locations at snap of the ball
+  
+  filter(event == 'ball_snap')
+
+gunner19$gunner <- 1
+gunner19$vise <- 0
+
+vise19 <- tracking2019 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialVises19, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #filter to just looking at locations at snap of the ball
+  
+  filter(event == 'ball_snap')
+
+vise19$gunner <- 0
+vise19$vise <- 1
+
+
+gunner_vise19 <- rbind(gunner19, vise19)
+
+```
+
+
+merging 2020 data frames
+```{r}
+
+gunner20 <- tracking2020 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialGunners, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #filter to just looking at locations at snap of the ball
+  
+  filter(event == 'ball_snap')
+
+gunner20$gunner <- 1
+gunner20$vise <- 0
+
+
+vise20 <- tracking2020 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialVises, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #filter to just looking at locations at snap of the ball
+  
+  filter(event == 'ball_snap')
+
+vise20$gunner <- 0
+vise20$vise <- 1
+
+gunner_vise20 <- rbind(gunner20, vise20)
+
+```
+
+gunner and vise coordinates at snap of ball
+```{r}
+
+gunner_vise_coord <- rbind(gunner_vise20, gunner_vise19, gunner_vise18)
+#write_csv(gunner_vise_coord, "gunner_vise_coord.csv")
+```
+
+
+#showing if there is a double team on a gunner at snap of ball
+
+```{r}
+gunner_vise_coord <-
+  gunner_vise_coord %>% 
+  group_by(FinalID.x) %>% 
+  mutate(double_team = if_else(sum(gunner == 1) < sum(gunner == 0),1,0)) %>%
+  ungroup()
+
+```
+
+#looking at play by play data for gunners
+```{r}
+pff_pbp_gunner <- gunner_speeds %>% left_join(plays_punt, c('gameId', 'playId'))
+```
+
+#merging datasets together
+
+```{r}
+double_team <- gunner_vise_coord %>% select(gameId,playId, nflId,double_team, gunner)
+
+master_data <- left_join(pff_pbp_gunner, double_team, by = c('gameId', 'playId','nflId'))
+
+master_data <- master_data %>% left_join(PFF, by = c('gameId', 'playId'))
+
+```
+
+#creating left and right side of field for gunner and vises at snap of ball
+
+```{r}
+
+gunner_vise_coord_left <- gunner_vise_coord %>% filter(y < 26.64)
+
+gunner_vise_coord_right <- gunner_vise_coord %>% filter(y > 26.63)
+
+
+gunner_left_vise_count <- gunner_vise_coord_left %>% 
+   group_by(gameId, playId) %>% 
+   summarize(vise_on = (sum(vise)) + 1 - sum(gunner))
+
+gunner_vise_coord_left <- gunner_vise_coord_left %>% left_join(gunner_left_vise_count)
+
+
+gunner_right_vise_count <- gunner_vise_coord_right %>% 
+   group_by(gameId, playId) %>% 
+   summarize(vise_on = (sum(vise)) + 1 - sum(gunner))
+
+gunner_vise_coord_right <- gunner_vise_coord_right %>% left_join(gunner_right_vise_count)
+
+
+
+gunner_vise_coord_count <- rbind(gunner_vise_coord_left, gunner_vise_coord_right)
+
+```
+
+#merging vise count with master data
+```{r}
+
+gunner_vise_coord_count <- gunner_vise_coord_count %>% select(gameId,playId,nflId,vise_on)
+master_data <- master_data %>% left_join(gunner_vise_coord_count)
+
+```
+
+#creating separation cutoff
+
+```{r}
+separation_at_punt18 <- tracking2018 %>% filter(event == "punt")
+separation_at_punt19 <- tracking2019 %>% filter(event == "punt")
+separation_at_punt20 <- tracking2020 %>% filter(event == "punt")
+
+separation_at_punt <- rbind(separation_at_punt18,separation_at_punt19,separation_at_punt20)
+
+separation_at_punt_left <- separation_at_punt %>% filter(y < 26.64)
+
+separation_at_punt_right <- separation_at_punt %>% filter(y > 26.63)
+
+```
+
+#getting just gunners and vises for the event at punt on left side 2020
+
+```{r}
+separation_punt_gunner20_left <- separation_at_punt_left %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialGunners, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup()
+
+separation_punt_gunner20_left$gunner <- 1
+separation_punt_gunner20_left$vise <- 0
+
+
+separation_punt_vise20_left <- separation_at_punt_left %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialVises, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup()
+
+
+separation_punt_vise20_left$gunner <- 0
+separation_punt_vise20_left$vise <- 1
+
+gunner_vise_punt_sep20_left <- rbind(separation_punt_gunner20_left, separation_punt_vise20_left)
+```
+
+#getting just gunners and vises for the event at punt on left side 2019
+
+```{r}
+separation_punt_gunner19_left <- separation_at_punt_left %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialGunners19, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup()
+
+separation_punt_gunner19_left$gunner <- 1
+separation_punt_gunner19_left$vise <- 0
+
+
+separation_punt_vise19_left <- separation_at_punt_left %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialVises19, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup()
+
+separation_punt_vise19_left$gunner <- 0
+separation_punt_vise19_left$vise <- 1
+
+gunner_vise_punt_sep19_left <- rbind(separation_punt_gunner19_left, separation_punt_vise19_left)
+```
+
+
+#getting just gunners and vises for the event at punt on left side 2018
+
+```{r}
+separation_punt_gunner18_left <- separation_at_punt_left %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialGunners18, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup()
+
+separation_punt_gunner18_left$gunner <- 1
+separation_punt_gunner18_left$vise <- 0
+
+
+separation_punt_vise18_left <- separation_at_punt_left %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialVises18, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup()
+
+separation_punt_vise18_left$gunner <- 0
+separation_punt_vise18_left$vise <- 1
+
+gunner_vise_punt_sep18_left <- rbind(separation_punt_gunner18_left, separation_punt_vise18_left)
+```
+
+
+#getting just gunners and vises for the event at punt on right side 2020
+
+```{r}
+separation_punt_gunner20_right <- separation_at_punt_right %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialGunners, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup()
+
+separation_punt_gunner20_right$gunner <- 1
+separation_punt_gunner20_right$vise <- 0
+
+
+separation_punt_vise20_right <- separation_at_punt_right %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialVises, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup()
+
+
+separation_punt_vise20_right$gunner <- 0
+separation_punt_vise20_right$vise <- 1
+
+gunner_vise_punt_sep20_right <- rbind(separation_punt_gunner20_right, separation_punt_vise20_right)
+```
+
+#getting just gunners and vises for the event at punt on right side 2019
+
+```{r}
+separation_punt_gunner19_right <- separation_at_punt_right %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialGunners19, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup()
+
+separation_punt_gunner19_right$gunner <- 1
+separation_punt_gunner19_right$vise <- 0
+
+
+separation_punt_vise19_right <- separation_at_punt_right %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialVises19, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup()
+
+separation_punt_vise19_right$gunner <- 0
+separation_punt_vise19_right$vise <- 1
+
+gunner_vise_punt_sep19_right <- rbind(separation_punt_gunner19_right, separation_punt_vise19_right)
+```
+
+
+#getting just gunners and vises for the event at punt on right side 2018
+
+```{r}
+separation_punt_gunner18_right <- separation_at_punt_right %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialGunners18, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup()
+
+separation_punt_gunner18_right$gunner <- 1
+separation_punt_gunner18_right$vise <- 0
+
+
+separation_punt_vise18_right <- separation_at_punt_right %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners and vises
+  inner_join(df_PFF_specialVises18, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId) %>%
+  
+  #ungrouping
+  ungroup()
+
+separation_punt_vise18_right$gunner <- 0
+separation_punt_vise18_right$vise <- 1
+
+gunner_vise_punt_sep18_right <- rbind(separation_punt_gunner18_right, separation_punt_vise18_right)
+```
+
+
+#creating the dataframes with gunners and vises on left and right side at the event "punt"
+
+```{r}
+gunner_vise_punt_sep_right <- rbind(gunner_vise_punt_sep18_right,gunner_vise_punt_sep19_right,gunner_vise_punt_sep20_right)
+
+
+gunner_vise_punt_sep_left <- rbind(gunner_vise_punt_sep18_left,gunner_vise_punt_sep19_left,gunner_vise_punt_sep20_left)
+
+```
+
+#creating difference of gunner vs vice on x
+
+```{r}
+#filtering data to look at gunners by themselves on one side
+
+#right side
+single_gunner_right <- gunner_vise_punt_sep_right %>% arrange(FinalID.x) %>% group_by(FinalID.x) %>% summarise(gunner_sum = sum(gunner))
+
+ID_single_gunner_right <- single_gunner_right[(single_gunner_right$gunner_sum > 1) | (single_gunner_right$gunner_sum < 1) ,]$FinalID.x
+
+gunner_vise_punt_sep_right <- gunner_vise_punt_sep_right %>% filter(!(FinalID.x %in% ID_single_gunner_right))
+
+#left side
+single_gunner_left <- gunner_vise_punt_sep_left %>% arrange(FinalID.x) %>% group_by(FinalID.x) %>% summarise(gunner_sum = sum(gunner))
+
+ID_single_gunner_left <- single_gunner_left[(single_gunner_left$gunner_sum > 1) | (single_gunner_left$gunner_sum < 1) ,]$FinalID.x
+
+gunner_vise_punt_sep_left <- gunner_vise_punt_sep_left %>% filter(!(FinalID.x %in% ID_single_gunner_left))
+
+#creating the difference
+
+#right side
+gunner_vise_punt_sep_right <- gunner_vise_punt_sep_right %>%
+  group_by(gameId, playId) %>%
+   arrange(gameId, playId) %>%
+  mutate(diff = abs(x[gunner == 1] - x))
+
+#left side
+gunner_vise_punt_sep_left <- gunner_vise_punt_sep_left %>%
+  group_by(gameId, playId) %>%
+   arrange(gameId, playId) %>%
+  mutate(diff = abs(x[gunner == 1] - x))
+```
+
+#creating minimum distance from vise on x coord
+```{r}
+
+gunner_vise_punt_sep_right <- gunner_vise_punt_sep_right %>% group_by(gameId, playId) %>% arrange(gameId, playId) %>% mutate(min_diff_vise_x = min(diff[vise == 1]))
+
+gunner_vise_punt_sep_left <- gunner_vise_punt_sep_left %>% group_by(gameId, playId) %>% arrange(gameId, playId) %>% mutate(min_diff_vise_x = min(diff[vise == 1]))
+
+gunner_vise_punt_sep_final <- rbind(gunner_vise_punt_sep_right,gunner_vise_punt_sep_left)
+
+```
+
+#creating new column for diff from vise on x coord in master data set
+
+```{r}
+
+gunner_vise_punt_sep_final <- gunner_vise_punt_sep_final %>% select(gameId,playId,nflId,min_diff_vise_x)
+
+master_data <- master_data %>% inner_join(gunner_vise_punt_sep_final)
+
+master_data %>% group_by(gameId,playId) %>% summarize(gunner_sum = sum(gunner)) %>% arrange(desc(gunner_sum))
+
+```
+
+
+#getting max acceleration for gunners before on average time of punt return in 2020
+
+```{r}
+df_maxAccel20 <- tracking2020 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners
+  inner_join(df_PFF_specialGunners, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId,
+         
+         #player is on home team and kicking team is home
+         ((team == 'home') & (possessionTeam == homeTeamAbbr)) |
+           ((team == 'away') & (possessionTeam == visitorTeamAbbr))  ) %>%
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #grouping by gameId, playId and nflId
+  group_by(gameId, playId, nflId) %>%
+  
+  #filtering for first 89 observations
+  filter(row_number() <= 89) %>%
+  
+  #calculating max speed for given play / player
+  summarize(maxAccel = max(a, na.rm = T), .groups = 'keep' ) %>%
+  
+  #ungrouping
+  ungroup()
+
+```
+
+
+#getting max acceleration for gunners before on average time of punt return in 2019
+
+```{r}
+df_maxAccel19 <- tracking2019 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners
+  inner_join(df_PFF_specialGunners19, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId,
+         
+         #player is on home team and kicking team is home
+         ((team == 'home') & (possessionTeam == homeTeamAbbr)) |
+           ((team == 'away') & (possessionTeam == visitorTeamAbbr))  ) %>%
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #grouping by gameId, playId and nflId
+  group_by(gameId, playId, nflId) %>%
+  
+  #filtering for first 89 observations
+  filter(row_number() <= 89) %>%
+  
+  #calculating max speed for given play / player
+  summarize(maxAccel = max(a, na.rm = T), .groups = 'keep' ) %>%
+  
+  #ungrouping
+  ungroup()
+
+```
+
+#getting max acceleration for gunners before on average time of punt return in 2018
+
+```{r}
+df_maxAccel18 <- tracking2018 %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners
+  inner_join(df_PFF_specialGunners18, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+  
+  #removing the kicker from the tracking data
+  filter(kickerId != nflId,
+         
+         #player is on home team and kicking team is home
+         ((team == 'home') & (possessionTeam == homeTeamAbbr)) |
+           ((team == 'away') & (possessionTeam == visitorTeamAbbr))  ) %>%
+  
+  #ungrouping
+  ungroup() %>%
+  
+  #grouping by gameId, playId and nflId
+  group_by(gameId, playId, nflId) %>%
+  
+  #filtering for first 89 observations
+  filter(row_number() <= 89) %>%
+  
+  #calculating max speed for given play / player
+  summarize(maxAccel = max(a, na.rm = T), .groups = 'keep' ) %>%
+  
+  #ungrouping
+  ungroup()
+
+```
+
+#merging max accelerations into master data
+
+```{r}
+
+accel_max <- rbind(df_maxAccel18, df_maxAccel19, df_maxAccel20)
+
+
+master_data <- master_data %>% left_join(accel_max)
+
+```
+#Measuring distance bewteen ball and gunner when ball hits ground or caught
+
+getting x and y for gunners in 2020 when ball hits ground or received
+
+```{r}
+
+events <- c('punt_received','punt_land' ,'fair_catch')
+
+df_gunner_receive20 <- tracking2020 %>%
+  
+  filter(event %in% events) %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners
+  inner_join(df_PFF_specialGunners, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId'))
+```
+
+getting x and y for gunners in 2019 when ball hits ground or received
+
+```{r}
+df_gunner_receive19 <- tracking2019 %>%
+  
+  filter(event %in% events) %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners
+  inner_join(df_PFF_specialGunners19, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId'))
+```
+
+getting x and y for gunners in 2018 when ball hits ground or received
+
+```{r}
+df_gunner_receive18 <- tracking2018 %>%
+  
+  filter(event %in% events) %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #only including gunners
+  inner_join(df_PFF_specialGunners18, by = c("gameId", 'playId', 'nflId'))  %>%
+  
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId'))
+
+colnames(tracking2018)
+
+```
+
+
+getting x and y for football in 2020 when ball hits ground or received
+
+```{r}
+
+events <- c('punt_received','punt_land' ,'fair_catch')
+
+df_ball_receive20 <- tracking2020 %>%
+  
+  filter(event %in% events) %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #just looking at football
+  filter(team == 'football') %>%
+
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId'))
+
+```
+
+getting x and y for football in 2019 when ball hits ground or received
+
+```{r}
+df_ball_receive19 <- tracking2019 %>%
+  
+  filter(event %in% events) %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #just looking at football
+  filter(team == 'football') %>%
+
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId'))
+
+```
+
+getting x and y for football in 2018 when ball hits ground or received
+
+```{r}
+df_ball_receive18 <- tracking2018 %>%
+  
+  filter(event %in% events) %>%
+  
+  #joining games
+  inner_join(games, by = 'gameId') %>%
+  
+  #just looking at football
+  filter(team == 'football') %>%
+
+  #joining punt plays
+  inner_join(plays_punt, by = c('gameId', 'playId'))
+
+```
+
+#creating dataset with ball and gunners at ball land
+
+```{r}
+ball_receive <- rbind(df_ball_receive18,df_ball_receive19,df_ball_receive20)
+
+gunner_receive <- rbind(df_gunner_receive18, df_gunner_receive19, df_gunner_receive20)
+
+gunner_ball_receive <- rbind(ball_receive, gunner_receive)
+```
+
+#creating distance from ball and gunner on x and y
+
+```{r}
+#creating x_difference
+
+gunner_ball_receive <- gunner_ball_receive %>%
+  group_by(gameId, playId) %>%
+   arrange(gameId, playId) %>%
+  mutate(diff_football_x = abs(x[team == 'football'] - x))
+
+#creating y_difference
+
+gunner_ball_receive <- gunner_ball_receive %>%
+  group_by(gameId, playId) %>%
+   arrange(gameId, playId) %>%
+  mutate(diff_football_y = abs(y[team == 'football'] - y))
+
+
+```
+
+
+#merging gunner distance from ball at ball drop to master dataset
+
+```{r}
+
+gunner_ball_receive <- gunner_ball_receive %>% select(gameId, playId, nflId, diff_football_x, diff_football_y)
+
+master_data <- master_data %>% left_join(gunner_ball_receive, by = c("gameId", "playId", "nflId"))
+
+master_data <- master_data %>% drop_na(gunner)
+
+```
+
+#figuring out max distance covered within first 40 observations (initial sprint portion of play, was 80 observation at third quartile for start of punt return so divide in half) 2020
+
+```{r}
+
+df_maxdist20 <- tracking2020 %>%
+
+            #joining games
+            inner_join(games, by = 'gameId') %>%
+
+            #using inner_join to only have gunners
+            inner_join(df_PFF_specialGunners, by = c("gameId", 'playId', 'nflId'))  %>%
+
+            #joining punt plays
+            inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+
+            #ungrouping
+            ungroup() %>%
+
+            #grouping by gameId, playId and nflId
+            group_by(gameId, playId, nflId) %>%
+
+            #filtering for first 40 observations
+            filter(row_number() <= 40) %>%
+
+            #calculatingdistance for given play / player
+            summarize(sumDist = sum(dis, na.rm = T), .groups = 'keep') %>%
+
+            #ungrouping
+            ungroup()
+
+```
+
+#figuring out max distance covered within first 40 observations (initial sprint portion of play, was 80 observation at third quartile for start of punt return so divide in half) 2019
+
+```{r}
+
+df_maxdist19 <- tracking2019 %>%
+
+            #joining games
+            inner_join(games, by = 'gameId') %>%
+
+            #using inner_join to only have gunners
+            inner_join(df_PFF_specialGunners19, by = c("gameId", 'playId', 'nflId'))  %>%
+
+            #joining punt plays
+            inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+
+            #ungrouping
+            ungroup() %>%
+
+            #grouping by gameId, playId and nflId
+            group_by(gameId, playId, nflId) %>%
+
+            #filtering for first 40 observations
+            filter(row_number() <= 40) %>%
+
+            #calculatingdistance for given play / player
+            summarize(sumDist = sum(dis, na.rm = T), .groups = 'keep') %>%
+
+            #ungrouping
+            ungroup()
+
+```
+
+#figuring out max distance covered within first 40 observations (initial sprint portion of play, was 80 observation at third quartile for start of punt return so divide in half) 2018
+
+```{r}
+
+df_maxdist18 <- tracking2018 %>%
+
+            #joining games
+            inner_join(games, by = 'gameId') %>%
+
+            #using inner_join to only have gunners
+            inner_join(df_PFF_specialGunners18, by = c("gameId", 'playId', 'nflId'))  %>%
+
+            #joining punt plays
+            inner_join(plays_punt, by = c('gameId', 'playId')) %>%
+
+            #ungrouping
+            ungroup() %>%
+
+            #grouping by gameId, playId and nflId
+            group_by(gameId, playId, nflId) %>%
+
+            #filtering for first 40 observations
+            filter(row_number() <= 40) %>%
+
+            #calculatingdistance for given play / player
+            summarize(sumDist = sum(dis, na.rm = T), .groups = 'keep') %>%
+
+            #ungrouping
+            ungroup()
+
+```
+
+#merging new distance variable in master dataframe
+
+```{r}
+df_max_dist_final <- rbind(df_maxdist18,df_maxdist19,df_maxdist20)
+
+master_data <- master_data %>% left_join(df_max_dist_final)
+
+#removing blocked punts and out of bounds special teams results
+
+non_important <- c("Out of Bounds","Blocked Punt")
+
+master_data <- master_data %>% filter(!(specialTeamsResult %in% non_important))
+
+#removes 1220 observations
+
+
+```
+
+#creating muffed, fair catch, and touch back columns
+
+```{r}
+
+master_data$muffed <- if_else(master_data$specialTeamsResult == "Muffed",1,0)
+master_data$fair_catch <- if_else(master_data$specialTeamsResult == "Fair Catch",1,0)
+
+#touch back could matter because gunners might mess up on spotting the ball which can result in a better starting point for offense
+master_data$touchback <- if_else(master_data$specialTeamsResult == "Touchback",1,0)
+
+#write_csv(master_data, "master_data.csv")
+
+```
+
+#creating a column to see if gunner was tackler
+
+2020
+```{r}
+###Tackle
+df_PFF_tacklers20 <- PFF %>%
+  
+  #splitting into a column for each special teams gunner
+  separate(tackler, sep = '; ', into = c("teamJersey1",
+                                                      "teamJersey2",
+                                                      "teamJersey3",
+                                                      "teamJersey4",
+                                                      "teamJersey5",
+                                                      "teamJersey6",
+                                                      "teamJersey7",
+                                                      "teamJersey8",
+                                                      "teamJersey9",
+                                                      "teamJersey10",
+                                                      "teamJersey11")) %>%
+  
+  
+  #selecting jersey numbers for each team
+  select(gameId, playId, teamJersey1, teamJersey2,
+         teamJersey3, teamJersey4, teamJersey5,
+         teamJersey6, teamJersey7, teamJersey8,
+         teamJersey9, teamJersey10, teamJersey11) %>%
+  
+  #gathering data
+  gather(key = 'Type', value = 'teamJersey', -gameId, -playId) %>%
+  
+  #dropping NA rows
+  drop_na() %>%
+  
+  #joining to jersey map
+  inner_join(df_jerseyMap, by = c("gameId", 'teamJersey')) %>%
+  
+  #selecting variables of interest
+  select(gameId, playId, nflId) %>%
+  
+  arrange(gameId, playId, nflId)
+```
+2019
+```{r}
+###Tackle
+df_PFF_tacklers19 <- PFF %>%
+  
+  #splitting into a column for each special teams gunner
+  separate(tackler, sep = '; ', into = c("teamJersey1",
+                                                      "teamJersey2",
+                                                      "teamJersey3",
+                                                      "teamJersey4",
+                                                      "teamJersey5",
+                                                      "teamJersey6",
+                                                      "teamJersey7",
+                                                      "teamJersey8",
+                                                      "teamJersey9",
+                                                      "teamJersey10",
+                                                      "teamJersey11")) %>%
+  
+  
+  #selecting jersey numbers for each team
+  select(gameId, playId, teamJersey1, teamJersey2,
+         teamJersey3, teamJersey4, teamJersey5,
+         teamJersey6, teamJersey7, teamJersey8,
+         teamJersey9, teamJersey10, teamJersey11) %>%
+  
+  #gathering data
+  gather(key = 'Type', value = 'teamJersey', -gameId, -playId) %>%
+  
+  #dropping NA rows
+  drop_na() %>%
+  
+  #joining to jersey map
+  inner_join(df_jerseyMap19, by = c("gameId", 'teamJersey')) %>%
+  
+  #selecting variables of interest
+  select(gameId, playId, nflId) %>%
+  
+  arrange(gameId, playId, nflId)
+```
+
+2018
+```{r}
+###Tackle
+df_PFF_tacklers18 <- PFF %>%
+  
+  #splitting into a column for each special teams gunner
+  separate(tackler, sep = '; ', into = c("teamJersey1",
+                                                      "teamJersey2",
+                                                      "teamJersey3",
+                                                      "teamJersey4",
+                                                      "teamJersey5",
+                                                      "teamJersey6",
+                                                      "teamJersey7",
+                                                      "teamJersey8",
+                                                      "teamJersey9",
+                                                      "teamJersey10",
+                                                      "teamJersey11")) %>%
+  
+  
+  #selecting jersey numbers for each team
+  select(gameId, playId, teamJersey1, teamJersey2,
+         teamJersey3, teamJersey4, teamJersey5,
+         teamJersey6, teamJersey7, teamJersey8,
+         teamJersey9, teamJersey10, teamJersey11) %>%
+  
+  #gathering data
+  gather(key = 'Type', value = 'teamJersey', -gameId, -playId) %>%
+  
+  #dropping NA rows
+  drop_na() %>%
+  
+  #joining to jersey map
+  inner_join(df_jerseyMap18, by = c("gameId", 'teamJersey')) %>%
+  
+  #selecting variables of interest
+  select(gameId, playId, nflId) %>%
+  
+  arrange(gameId, playId, nflId)
+```
+
+#Combining tacklers datasets and making made tackle column in master data set
+
+```{r}
+
+tacklers_all <- rbind(df_PFF_tacklers18, df_PFF_tacklers19, df_PFF_tacklers20)
+
+tacklers_all$tackle_id <- paste0(tacklers_all$gameId, tacklers_all$playId, tacklers_all$nflId)
+
+master_data$tackle_id <- paste0(master_data$gameId, master_data$playId, master_data$nflId)
+
+master_data$tackle_made <- if_else(master_data$tackle_id %in% tacklers_all$tackle_id,1,0)
+
+```
+
+#Creating a missed tackle column
+
+2020
+```{r}
+
+###missed Tackle
+df_PFF_missed_tacklers20 <- PFF %>%
+  
+  #splitting into a column for each special teams gunner
+  separate(missedTackler, sep = '; ', into = c("teamJersey1",
+                                                      "teamJersey2",
+                                                      "teamJersey3",
+                                                      "teamJersey4",
+                                                      "teamJersey5",
+                                                      "teamJersey6",
+                                                      "teamJersey7",
+                                                      "teamJersey8",
+                                                      "teamJersey9",
+                                                      "teamJersey10",
+                                                      "teamJersey11")) %>%
+  
+  
+  #selecting jersey numbers for each team
+  select(gameId, playId, teamJersey1, teamJersey2,
+         teamJersey3, teamJersey4, teamJersey5,
+         teamJersey6, teamJersey7, teamJersey8,
+         teamJersey9, teamJersey10, teamJersey11) %>%
+  
+  #gathering data
+  gather(key = 'Type', value = 'teamJersey', -gameId, -playId) %>%
+  
+  #dropping NA rows
+  drop_na() %>%
+  
+  #joining to jersey map
+  inner_join(df_jerseyMap, by = c("gameId", 'teamJersey')) %>%
+  
+  #selecting variables of interest
+  select(gameId, playId, nflId) %>%
+  
+  arrange(gameId, playId, nflId)
+
+
+```
+
+2019
+```{r}
+
+###missed Tackle
+df_PFF_missed_tacklers19 <- PFF %>%
+  
+  #splitting into a column for each special teams gunner
+  separate(missedTackler, sep = '; ', into = c("teamJersey1",
+                                                      "teamJersey2",
+                                                      "teamJersey3",
+                                                      "teamJersey4",
+                                                      "teamJersey5",
+                                                      "teamJersey6",
+                                                      "teamJersey7",
+                                                      "teamJersey8",
+                                                      "teamJersey9",
+                                                      "teamJersey10",
+                                                      "teamJersey11")) %>%
+  
+  
+  #selecting jersey numbers for each team
+  select(gameId, playId, teamJersey1, teamJersey2,
+         teamJersey3, teamJersey4, teamJersey5,
+         teamJersey6, teamJersey7, teamJersey8,
+         teamJersey9, teamJersey10, teamJersey11) %>%
+  
+  #gathering data
+  gather(key = 'Type', value = 'teamJersey', -gameId, -playId) %>%
+  
+  #dropping NA rows
+  drop_na() %>%
+  
+  #joining to jersey map
+  inner_join(df_jerseyMap19, by = c("gameId", 'teamJersey')) %>%
+  
+  #selecting variables of interest
+  select(gameId, playId, nflId) %>%
+  
+  arrange(gameId, playId, nflId)
+
+
+```
+
+2018
+```{r}
+
+###missed Tackle
+df_PFF_missed_tacklers18 <- PFF %>%
+  
+  #splitting into a column for each special teams gunner
+  separate(missedTackler, sep = '; ', into = c("teamJersey1",
+                                                      "teamJersey2",
+                                                      "teamJersey3",
+                                                      "teamJersey4",
+                                                      "teamJersey5",
+                                                      "teamJersey6",
+                                                      "teamJersey7",
+                                                      "teamJersey8",
+                                                      "teamJersey9",
+                                                      "teamJersey10",
+                                                      "teamJersey11")) %>%
+  
+  
+  #selecting jersey numbers for each team
+  select(gameId, playId, teamJersey1, teamJersey2,
+         teamJersey3, teamJersey4, teamJersey5,
+         teamJersey6, teamJersey7, teamJersey8,
+         teamJersey9, teamJersey10, teamJersey11) %>%
+  
+  #gathering data
+  gather(key = 'Type', value = 'teamJersey', -gameId, -playId) %>%
+  
+  #dropping NA rows
+  drop_na() %>%
+  
+  #joining to jersey map
+  inner_join(df_jerseyMap18, by = c("gameId", 'teamJersey')) %>%
+  
+  #selecting variables of interest
+  select(gameId, playId, nflId) %>%
+  
+  arrange(gameId, playId, nflId)
+
+
+```
+
+#combining all missed tackles together
+
+```{r}
+missed_tacklers_all <- rbind(df_PFF_missed_tacklers18, df_PFF_missed_tacklers19, df_PFF_missed_tacklers20)
+
+missed_tacklers_all$miss_tackle_id <- paste0(missed_tacklers_all$gameId, missed_tacklers_all$playId, missed_tacklers_all$nflId)
+
+master_data$miss_tackle_id <- paste0(master_data$gameId, master_data$playId, master_data$nflId)
+
+master_data$missed_tackle <- if_else(master_data$miss_tackle_id %in% missed_tacklers_all$miss_tackle_id,1,0)
+
+#write_csv(master_data, "master_data.csv")
+
+```
+
+
+#Summary of Created Variables
+
+```{r}
+#Description of Data:
+#play by play data for gunners between 2018-2020
+#data contains only plays where there is no more than 1 gunner on each side of ball
+
+#Variables:
+
+#sumDist is the distance traveled by gunner in first 40 observations
+#diff_football_y shows absolute value difference of y between football and gunner when punt is caught or hit the ground
+#diff_football_x shows absolute value difference of x between football and gunner when punt is caught or hit the ground
+#maxAccel is the max acceleration of gunner before punt is returned, fair caught, or when the punt lands
+#min_diff_vise_x is the difference between x of the gunner and vice exactly when the ball is punted
+#vise_on is the number of vises on the same side as the gunner observed
+#maxSpeed is the max speed of the gunner before the ball is caught or hits the ground
+#double_team, when there is a double team on a gunner on a play (a double team was counted if there were more vises than gunners)
+#muffed is a boolean of whether or not there was a muff on the play
+#fair_catch is a boolean of whether or not there was a muff on the play
+#touchback is a boolean of whether or not there was a touchback on the play
+#tackle made is a boolean of whether the gunner made the tackle that play
+#missed_tackle is a boolean of whether the gunner missed a tackle that play
+
+master_data <- read_csv("master_data.csv")
+
+
+master_data <- master_data %>% dplyr::select(gameId,playId,nflId, quarter, playDescription,specialTeamsResult, penaltyJerseyNumbers, penaltyYards, preSnapHomeScore, preSnapVisitorScore, kickLength, kickReturnYardage, playResult, FinalID, gunner, snapDetail, snapTime, operationTime, hangTime, kickType, kickDirectionIntended, kickDirectionActual, returnDirectionIntended, returnDirectionActual, kickContactType, maxSpeed, maxAccel, vise_on, min_diff_vise_x, diff_football_x, diff_football_y, sumDist, muffed, fair_catch, touchback, tackle_made, missed_tackle)
+
+
+master_data <- master_data %>% left_join(players, by = "nflId")
+
+colnames(master_data)
+
+```
+
+#Start of Analysis
+
+```{r}
+#looking at linear model
+library("GGally")
+
+master_data <- master_data %>% filter(!(min_diff_vise_x == 'Inf'))
+
+ggpairs(master_data[,c(13,26:37)], lower.panel = NULL)
+
+ggcorr(master_data[,c(13,26:37)])
+
+cor(master_data[,c(13,26:37)])
+
+ggplot(master_data, aes(min_diff_vise_x, playResult)) + geom_point()
+
+ggplot(master_data, aes(diff_football_x, playResult)) + geom_point()
+
+ggplot(master_data, aes(diff_football_y, playResult)) + geom_point()
+
+summary(master_data)
+
+master_data <- transform(
+  master_data,
+  tackle_made = as.factor(tackle_made),
+  missed_tackle = as.factor(missed_tackle),
+  muffed = as.factor(muffed),
+  fair_catch = as.factor(fair_catch),
+  touchback = as.factor(touchback),
+  min_diff_vise_x = as.numeric(min_diff_vise_x)
+)
+
+summary(master_data)
+
+```
+
+
+#prep for random forest on play result and running
+
+```{r}
+library(randomForest)
+library(MASS)
+set.seed(2)
+library(tree)
+set.seed(2)
+
+play_result_forest <- master_data[,c(13,26:32,36:37)]
+
+play_result_forest <- na.exclude(play_result_forest)
+
+train = sample(1:nrow(play_result_forest), nrow(play_result_forest)/2)
+
+tree.play_result_forest=tree(playResult~.,play_result_forest,subset=train)
+
+summary(tree.play_result_forest)
+
+plot(tree.play_result_forest)
+text(tree.play_result_forest,pretty=0)
+
+cv.play_result_forest=cv.tree(tree.play_result_forest); cv.play_result_forest
+
+plot(cv.play_result_forest$size,cv.play_result_forest$dev,type='b')
+#4 is lowest
+
+#test set mse
+
+yhat=predict(tree.play_result_forest,newdata=play_result_forest[-train,])
+play_result_forest.test=play_result_forest[-train,"playResult"]
+#plot(yhat,play_result_forest.test)
+#abline(0,1)
+mean((yhat-play_result_forest.test)^2) #107.5207
+sqrt(107.5207)
+
+
+#Second model Random Forest 
+
+set.seed(73)
+
+rf.playResult =randomForest(playResult~.,data=play_result_forest,subset=train,mtry=2,importance=TRUE)
+yhat.rf = predict(rf.playResult,newdata=play_result_forest[-train,])
+mean((yhat.rf-play_result_forest.test)^2)
+
+#has lower MSE so better
+sqrt(102.774)
+
+#seeing what has smallest ooberror for mtry
+
+mtry <- tuneRF(play_result_forest[-1],play_result_forest$playResult, ntreeTry=500,
+               stepFactor=1.5,improve=0.01, trace=TRUE, plot=TRUE)
+best.m <- mtry[mtry[, 2] == min(mtry[, 2]), 1]
+print(mtry)
+print(best.m)
+
+
+#Evaluate variable importance
+variable_importance <- importance(rf.playResult, scale = TRUE, type = 1)
+varImpPlot(rf.playResult)
+
+```
+
+#creating a gunner rating based on scaling every column individually by 1 and then mutiplying each variable by the variable importance found in the random forest model, then adding up all the variables to find who has been the best gunner in the past three years to see how accurate this model is.
+
+```{r}
+#cleaning data to set up scale
+
+#filtering out gunners who didn't play a certain amount
+
+play_count20 <- tracking2020 %>% inner_join(df_PFF_specialGunners, by = c("gameId", 'playId', 'nflId')) %>% inner_join(plays_punt, by = c('gameId', 'playId')) %>% filter(kickerId != nflId) %>% dplyr::select(nflId,gameId, playId) %>% group_by(nflId,gameId, playId) %>% distinct()
+
+play_count20 <- play_count20 %>% group_by(nflId) %>% summarise(plays20 = n())
+
+
+play_count19 <- tracking2019 %>% inner_join(df_PFF_specialGunners19, by = c("gameId", 'playId', 'nflId')) %>% inner_join(plays_punt, by = c('gameId', 'playId')) %>% filter(kickerId != nflId) %>% dplyr::select(nflId,gameId, playId) %>% group_by(nflId,gameId, playId) %>% distinct()
+
+play_count19 <- play_count19 %>% group_by(nflId) %>% summarise(plays19 = n())
+
+
+play_count18 <- tracking2018 %>% inner_join(df_PFF_specialGunners18, by = c("gameId", 'playId', 'nflId')) %>% inner_join(plays_punt, by = c('gameId', 'playId')) %>% filter(kickerId != nflId) %>% dplyr::select(nflId,gameId, playId) %>% group_by(nflId,gameId, playId) %>% distinct()
+
+play_count18 <- play_count18 %>% group_by(nflId) %>% summarise(plays18 = n())
+
+
+master_data <- master_data %>% left_join(play_count20, by = "nflId")
+master_data <- master_data %>% left_join(play_count19, by = "nflId")
+master_data <- master_data %>% left_join(play_count18, by = "nflId")
+
+master_data[c("plays20", "plays19","plays18")][is.na(master_data[c("plays20", "plays19","plays18")])] <- 0
+
+master_data <- master_data %>% group_by(nflId) %>% mutate(total_plays = plays20 + plays19 + plays18)
+
+
+play_count <- master_data %>% dplyr::select(nflId,total_plays) %>% distinct()
+
+summary(play_count)
+
+#after looking at the summary of plays I am going to make the cut off at 30 since that's 2 more than the mean of total_plays and which means the gunner with the least amount of plays would have averaged 10 snaps at gunner a season if they played in the NFL all three seasons
+
+master_data <- master_data %>% filter(total_plays > 29)
+
+###starting to create scale able variables
+
+master_data <- master_data %>%  group_by(nflId) %>% mutate(total_tackles = sum(as.integer(tackle_made)))
+
+master_data <- master_data %>%  group_by(nflId) %>% mutate(missed_tackles = sum(as.integer(missed_tackle)))
+
+###summarizing variables
+
+master_data <- master_data %>% group_by(nflId) %>% mutate(avg_max_speed = mean(maxSpeed, na.rm=TRUE))
+
+master_data <- master_data %>% group_by(nflId) %>% mutate(avg_maxAccel = mean(maxAccel, na.rm=TRUE))
+
+master_data <- master_data %>% group_by(nflId) %>% mutate(avg_vise_on = mean(vise_on, na.rm=TRUE))
+
+master_data <- master_data %>% group_by(nflId) %>% mutate(avg_min_diff_vise_x = mean(as.numeric(min_diff_vise_x), na.rm=TRUE))
+
+master_data <- master_data %>% group_by(nflId) %>% mutate(avg_diff_football_x = mean(as.numeric(diff_football_x), na.rm=TRUE))
+
+master_data <- master_data %>% group_by(nflId) %>% mutate(avg_diff_football_y = mean(as.numeric(diff_football_y), na.rm=TRUE))
+
+master_data <- master_data %>% group_by(nflId) %>% mutate(avg_sumDist = mean(as.numeric(sumDist), na.rm=TRUE))
+
+#selecting wanted data
+
+gunner_analysis <- master_data %>% dplyr::select(displayName,nflId,total_tackles,missed_tackles,avg_max_speed,avg_maxAccel,avg_vise_on,avg_min_diff_vise_x,avg_diff_football_x,avg_diff_football_y,avg_sumDist) %>% distinct()
+
+```
+
+
+```{r}
+colnames(gunner_analysis)
+
+#creating point system based on ranking of each variable, 1st place in any category is worth 130 and it goes down from there since that's the amount of players in data set
+
+gunner_analysis$rank_maxSpeed <- NA
+order.avg_max_speed <- order(gunner_analysis$avg_max_speed, gunner_analysis$nflId, decreasing = TRUE)
+gunner_analysis$rank_maxSpeed[order.avg_max_speed] <- 1:nrow(gunner_analysis)
+
+gunner_analysis$rank_maxAccel <- NA
+order.avg_maxAccel <- order(gunner_analysis$avg_maxAccel, gunner_analysis$nflId, decreasing = TRUE)
+gunner_analysis$rank_maxAccel[order.avg_maxAccel] <- 1:nrow(gunner_analysis)
+
+gunner_analysis$rank_total_tackles <- NA
+order.avg_total_tackles <- order(gunner_analysis$total_tackles, gunner_analysis$nflId, decreasing = TRUE)
+gunner_analysis$rank_total_tackles[order.avg_total_tackles] <- 1:nrow(gunner_analysis)
+
+gunner_analysis$rank_missed_tackles <- NA
+order.avg_missed_tackles <- order(gunner_analysis$missed_tackles, gunner_analysis$nflId, decreasing = FALSE)
+gunner_analysis$rank_missed_tackles[order.avg_missed_tackles] <- 1:nrow(gunner_analysis)
+
+#the higher vise on the better since the return team respect them more
+gunner_analysis$rank_vise_on <- NA
+order.avg_vise_on <- order(gunner_analysis$avg_vise_on, gunner_analysis$nflId, decreasing = TRUE)
+gunner_analysis$rank_vise_on[order.avg_vise_on] <- 1:nrow(gunner_analysis)
+
+gunner_analysis$rank_min_diff_vise_x <- NA
+order.avg_min_diff_vise_x <- order(gunner_analysis$avg_min_diff_vise_x, gunner_analysis$nflId, decreasing = TRUE)
+gunner_analysis$rank_min_diff_vise_x[order.avg_min_diff_vise_x] <- 1:nrow(gunner_analysis)
+
+gunner_analysis$rank_diff_football_x <- NA
+order.avg_diff_football_x <- order(gunner_analysis$avg_diff_football_x, gunner_analysis$nflId, decreasing = FALSE)
+gunner_analysis$rank_diff_football_x[order.avg_diff_football_x] <- 1:nrow(gunner_analysis)
+
+gunner_analysis$rank_diff_football_y <- NA
+order.avg_diff_football_y <- order(gunner_analysis$avg_diff_football_y, gunner_analysis$nflId, decreasing = FALSE)
+gunner_analysis$rank_diff_football_y[order.avg_diff_football_y] <- 1:nrow(gunner_analysis)
+
+gunner_analysis$rank_sumDist <- NA
+order.avg_sumDist <- order(gunner_analysis$avg_sumDist, gunner_analysis$nflId, decreasing = TRUE)
+gunner_analysis$rank_sumDist[order.avg_sumDist] <- 1:nrow(gunner_analysis)
+
+```
+
+
+#looking at ranks
+```{r}
+
+gunner_ranks <- gunner_analysis %>% dplyr::select(displayName,nflId, rank_maxAccel, rank_maxSpeed, rank_total_tackles, rank_missed_tackles, rank_vise_on, rank_min_diff_vise_x, rank_diff_football_x, rank_diff_football_y, rank_sumDist)
+
+#rf2_rank average rank of top two variables
+
+gunner_ranks <- gunner_ranks %>% mutate(rf2_rank = sum(rank_maxSpeed, rank_diff_football_x)/2)
+
+#rf4_rank average rank of top 4 variables
+
+gunner_ranks <- gunner_ranks %>% mutate(rf4_rank = sum(rank_maxSpeed, rank_diff_football_x, rank_diff_football_y, rank_sumDist)/4)
+
+#rf6_rank average rank of top 6 variables
+
+gunner_ranks <- gunner_ranks %>% mutate(rf6_rank = sum(rank_maxSpeed, rank_diff_football_x, rank_diff_football_y, rank_min_diff_vise_x,rank_sumDist,rank_total_tackles)/6)
+
+#rf_all average rank of all variables
+
+gunner_ranks <- gunner_ranks %>% mutate(rf_all = sum(rank_maxSpeed, rank_diff_football_x, rank_diff_football_y, rank_min_diff_vise_x,rank_sumDist,rank_total_tackles, rank_missed_tackles, rank_vise_on,rank_maxAccel)/9)
+
+#Top 20 in RF2
+
+rf2_20_df <- gunner_ranks %>% dplyr::select(displayName,rf2_rank) %>% arrange(rf2_rank) %>% head(20)
+
+#Top 20 in RF4
+
+rf4_20_df <- gunner_ranks %>% dplyr::select(displayName,rf4_rank) %>% arrange(rf4_rank) %>% head(20)
+
+#Top 20 in RF6
+
+rf6_20_df <- gunner_ranks %>% dplyr::select(displayName,rf6_rank) %>% arrange(rf6_rank) %>% head(20)
+
+#Top 20 in RFall
+
+rf_all_20_df <- gunner_ranks %>% dplyr::select(displayName,rf_all) %>% arrange(rf_all) %>% head(20)
+
+#how many times in top 20
+
+gunner_ranks <- gunner_ranks %>% mutate(rf2_top20 = ifelse(nflId %in% rf2_20_df$nflId,1,0))
+
+gunner_ranks <- gunner_ranks %>% mutate(rf4_top20 = ifelse(nflId %in% rf4_20_df$nflId,1,0))
+
+gunner_ranks <- gunner_ranks %>% mutate(rf6_top20 = ifelse(nflId %in% rf6_20_df$nflId,1,0))
+
+gunner_ranks <- gunner_ranks %>% mutate(rf_all_top20 = ifelse(nflId %in% rf_all_20_df$nflId,1,0))
+
+gunner_ranks <- gunner_ranks %>% mutate(times_in_top20 = sum(rf2_top20,rf4_top20,rf6_top20,rf_all_top20))
+
+gunner_in_all_20 <- gunner_ranks %>% dplyr::select(displayName,nflId, times_in_top20) %>% filter(times_in_top20 > 1)
+
+gunner_in_all_20 <- gunner_in_all_20 %>% left_join(gunner_ranks)
+
+gunner_in_all_20 <- gunner_in_all_20 %>% mutate(avg_rank = sum(rf_all, rf2_rank, rf4_rank, rf6_rank)/4) %>% arrange(avg_rank)
+
+```
+
+#Pictures
+```{r}
+
+library(png)
+
+importance_pic <- readPNG("importance.png")
+importance_pic
+
+grid::grid.raster(importance_pic)
+```
+
+
