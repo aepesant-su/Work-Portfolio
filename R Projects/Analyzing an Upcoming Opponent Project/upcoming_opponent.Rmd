@@ -1,0 +1,490 @@
+---
+title: "Analyzing an Upcoming Opponent Project"
+output: html_document
+date: "2023-03-29"
+---
+
+loading libraries
+
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(readr)
+library(stringr)
+library(gt)
+```
+
+```{r, message=FALSE, warning=FALSE}
+defense <- read_csv("data.def.csv")
+offense <- read_csv("data.off.csv")
+plays <- read_csv("data.plays.csv")
+```
+
+Questions:
+
+1). Create team and player level summary statistics tables from the play-by-play data. (Rush yards, sacks, etc.)
+
+```{r}
+#no play play IDS
+no_play_ids <- plays %>% filter(pff_NOPLAY == 1) %>% select(pff_PLAYID, pff_NOPLAY)
+#attaching no plays to offense and defense 
+offense <- offense %>% left_join(no_play_ids, by = join_by(pff_PLAYID)) %>% mutate(pff_NOPLAY = ifelse(is.na(pff_NOPLAY) == TRUE,0,pff_NOPLAY))
+defense <- defense %>% left_join(no_play_ids, by = join_by(pff_PLAYID)) %>% mutate(pff_NOPLAY = ifelse(is.na(pff_NOPLAY) == TRUE,0,pff_NOPLAY))
+
+#creating indicator for special teams plays
+plays <- plays %>% mutate(special_teams = ifelse(is.na(pff_SPECIALTEAMSTYPE) == FALSE,1,0))
+special_teams_ids <- plays %>% select(pff_PLAYID, special_teams)
+offense <- offense %>% left_join(special_teams_ids, by = join_by(pff_PLAYID)) %>% mutate(special_teams = ifelse(is.na(special_teams) == TRUE,0,special_teams))
+defense <- defense %>% left_join(special_teams_ids, by = join_by(pff_PLAYID)) %>% mutate(special_teams = ifelse(is.na(special_teams) == TRUE,0,special_teams))
+
+#creating indicator for plays with a loss
+plays$loss <- ifelse(plays$pff_GAINLOSS < 0,1,0)
+loss_plays_id <- plays %>% select(pff_PLAYID, loss)
+offense <- offense %>% left_join(loss_plays_id, by = join_by(pff_PLAYID)) %>% mutate(loss = ifelse(is.na(loss) == TRUE,0,loss))
+defense <- defense %>% left_join(loss_plays_id, by = join_by(pff_PLAYID)) %>% mutate(loss = ifelse(is.na(loss) == TRUE,0,loss))
+#manipulating plays data
+plays$fumble <- ifelse(grepl("FUMBLE",plays$PlayDescription)==TRUE,1,0)
+plays$fumble_lost <- ifelse(plays$fumble == 1 & plays$pff_DRIVEENDEVENT == "FUMBLE",1,0)
+plays$poss_change <- ifelse(plays$pff_OFFTEAM != lag(plays$pff_OFFTEAM),1,
+                            ifelse(is.na(lead(plays$pff_OFFTEAM)),1,
+                                   ifelse(is.na(lag(plays$pff_OFFTEAM)),1,0)))
+
+#getting time of possesions for each team
+plays$poss_change <- ifelse(is.na(plays$poss_change),1,plays$poss_change)
+
+plays$pff_CLOCK <- as.character(plays$pff_CLOCK)
+plays$pff_CLOCK <- substr(plays$pff_CLOCK,1,nchar(plays$pff_CLOCK)-3)
+plays$pff_CLOCK <- paste0("00:", plays$pff_CLOCK)
+plays$pff_CLOCK <- as.POSIXct(plays$pff_CLOCK,format='%H:%M:%S')
+top_mins <- plays %>% filter(poss_change == 1) %>% mutate(lead_time = lead(pff_CLOCK)) %>%
+  mutate(diff = ifelse(lead_time > pff_CLOCK, (as.POSIXct("00:15:00", format = "%H:%M:%S")  - lead_time)+
+                         (pff_CLOCK-as.POSIXct("00:00:00", format = "%H:%M:%S") ),
+                       ifelse(is.na(lead_time),pff_CLOCK-(as.POSIXct("00:00:00", format = "%H:%M:%S")),
+                              ifelse(pff_CLOCK>lead_time, pff_CLOCK-lead_time,0))))
+
+top_mins$diff <- ifelse(is.na(top_mins$diff), (top_mins$pff_CLOCK-as.POSIXct("00:00:00", format = "%H:%M:%S") ),top_mins$diff)
+
+top_final <- top_mins %>% group_by(pff_OFFTEAM) %>% summarise(top = round(sum(diff)/60,0))
+
+#getting all run plays
+run_plays <- plays %>% filter(pff_RUNPASS == "R"|pff_PASSRESULT == "RUN")
+run_plays$pff_TOUCHDOWN <- ifelse(is.na(run_plays$pff_TOUCHDOWN),0,1)
+#getting all pass plays
+pass_plays <- plays %>% filter(pff_RUNPASS == "P")
+pass_plays <- pass_plays %>% filter(!(pff_PASSRESULT %in% c("RUN")))
+pass_plays <- pass_plays %>% filter(pff_NOPLAY == 0)
+pass_plays$attempt <- ifelse(pass_plays$pff_PASSRESULT == "SACK",0,1)
+pass_plays$touchdown <- ifelse(is.na(pass_plays$pff_TOUCHDOWN)|pass_plays$pff_DRIVEENDEVENT == "INTERCEPTION-TD",0,1)
+pass_plays$sack_yardage <- ifelse(pass_plays$pff_PASSRESULT == "SACK",abs(pass_plays$pff_GAINLOSSNET),0)
+
+#getting summary statistics at team Level
+
+#team level
+
+#offensive plays
+num_plays <- plays %>% group_by(pff_OFFTEAM) %>% filter(is.na(pff_SPECIALTEAMSTYPE),pff_NOPLAY == 0) %>%
+  summarise(plays = n())
+
+#penalties
+plays$penalty_team <- ifelse(grepl("PENALTY on DAL",plays$PlayDescription)==TRUE,"DAL",
+                             ifelse(grepl("PENALTY on PHI",plays$PlayDescription)==TRUE,"PHI",NA))
+
+penalties <- plays %>% group_by(penalty_team) %>% filter(!(is.na(penalty_team))) %>%
+  mutate(penaly_reason = sub(".*PENALTY ", "", PlayDescription), yards_shorter =  sub(" yards.*", "", penaly_reason),
+         penalty_yards = as.numeric(gsub("\\D", "", yards_shorter))) %>%
+  summarise(penalties = n(), penalty_yards_tot = sum(penalty_yards))
+
+#scoring
+
+#touchdowns
+touchdown_total <- plays %>% mutate(team_touchdown = gsub('[[:digit:]]+', '', pff_TOUCHDOWN)) %>%
+  group_by(team_touchdown) %>% filter(!(is.na(team_touchdown))) %>% summarise(total_touchdowns = n()) %>%
+  mutate(team_touchdown = str_remove_all(team_touchdown," "))
+
+#field goals
+field_goals <- plays %>% filter(grepl("field goal", PlayDescription) == TRUE) %>%
+  mutate(fg_good = ifelse(grepl("is GOOD",PlayDescription)==TRUE,1,0)) %>%
+  group_by(pff_OFFTEAM) %>% summarise(fg_made = sum(fg_good), fg_attempts = n()) %>% mutate(fg_pct = (fg_made/fg_attempts)*100)
+
+#two point conversion
+plays %>% filter(grepl("two-point",tolower(PlayDescription)) == TRUE|
+                   grepl("two point",tolower(PlayDescription)) == TRUE|
+                   grepl("twopoint",tolower(PlayDescription)) == TRUE)#no two-point
+
+two_point_df <- data.frame(pff_OFFTEAM = c("PHI","DAL"),two_point_attempts = c(0,0),
+                           two_point_successful = c(0,0))
+
+#pat attempts
+pat_attempts_df <- plays %>% filter(grepl("extra point",tolower(PlayDescription)) == TRUE) %>%
+  mutate(pat_good = ifelse(grepl("is good",tolower(PlayDescription)) == TRUE,1,0)) %>% group_by(pff_OFFTEAM) %>%
+  summarise(pats_good = sum(pat_good), pat_attempts = n()) %>% mutate(pat_pct = (pats_good/pat_attempts)*100)
+
+#first downs
+first_downs <- plays %>% group_by(pff_OFFTEAM) %>% mutate(how_first = ifelse(pff_FIRSTDOWNGAINED == 1,pff_RUNPASS,NA),
+                                            penalty_first = ifelse((grepl("penalty",tolower(PlayDescription)) == TRUE)&(grepl("declined",tolower(PlayDescription))==FALSE)&(pff_FIRSTDOWNGAINED == 1),1,0),
+                                            run_first = ifelse((how_first == "R"|(pff_PASSRESULT == "RUN"& pff_FIRSTDOWNGAINED == 1))&penalty_first==0,1,0),
+                                            pass_first = ifelse((how_first == "P"&(pff_PASSRESULT != "RUN"))&penalty_first ==0,1,0)) %>%
+   summarise(first_downs = sum(pff_FIRSTDOWNGAINED, na.rm = T), passing_firsts = sum(pass_first, na.rm = T),
+             running_firsts = sum(run_first, na.rm = T), penalty_firsts = sum(penalty_first, na.rm = T))
+
+#third and fourth downs
+thrd_frth_df <- plays %>% mutate(third_down = ifelse(Down == 3&pff_NOPLAY==0,1,0), fourth_down = ifelse(Down == 4&(is.na(pff_SPECIALTEAMSTYPE)==TRUE)&pff_NOPLAY == 0,1,0), third_down_conv = ifelse(third_down == 1 & pff_FIRSTDOWNGAINED == 1,1,0), 
+                 fourth_down_conv = ifelse(fourth_down == 1 & pff_FIRSTDOWNGAINED == 1,1,0)) %>% group_by(pff_OFFTEAM) %>%
+  summarise(third_downs = sum(third_down),
+            fourth_downs = sum(fourth_down),
+            third_down_convs = sum(third_down_conv, na.rm = T),
+            fourth_down_convs = sum(fourth_down_conv, na.rm = T)) %>% mutate(thrd_pct = round((third_down_convs/third_downs)*100),
+                                                                             frth_pct =round((fourth_down_convs/fourth_downs)*100))
+#red zone
+
+#noticed red zone indicator was off so created my own
+plays$redZone2 <- ifelse(plays$AbsoluteYardLine <= 20,1,0) 
+
+red_zone_df <- plays %>% filter(redZone2 == 1&(is.na(pff_DRIVE) == FALSE)) %>% mutate(scored = ifelse(pff_DRIVEENDEVENT %in% c("TOUCHDOWN"),1,0)) %>%
+  select(pff_OFFTEAM, pff_DRIVE, scored) %>% distinct() %>% group_by(pff_OFFTEAM) %>%
+  summarise(red_zone_trips = n(), redZone_success = sum(scored)) %>% ungroup() %>% mutate(red_zone_pct = round((redZone_success/red_zone_trips)*100))
+
+#turnovers
+turnovers_df <- plays %>% group_by(pff_OFFTEAM) %>% summarise(interceptions = sum(pff_PASSRESULT == "INTERCEPTION",na.rm = T), fumbles = sum(fumble), fumbles_lost = sum(fumble_lost)) %>% mutate(Turnovers = interceptions+fumbles_lost)
+
+#run summary
+run_plays_sum <- run_plays %>% group_by(pff_OFFTEAM) %>%
+  summarise(rush_attempts = n(), rush_yards = sum(pff_GAINLOSS), yards_per_carry = round(rush_yards/rush_attempts,1), rushing_touchdowns = sum(pff_TOUCHDOWN))
+
+#pass summary
+pass_plays_sum <- pass_plays %>% group_by(pff_OFFTEAM) %>%
+  summarise(completions = sum(pff_PASSRESULT == "COMPLETE") ,pass_attempts = sum(attempt),passing_yards = sum(pff_GAINLOSSNET, na.rm = T),
+            completion_pct = round((completions/pass_attempts)*100,1), yards_per_attempt = round(passing_yards/pass_attempts,1),
+            yards_per_completion = round(passing_yards/completions,1), passing_touchdowns = sum(touchdown),
+            intercpetions = sum(pff_PASSRESULT == "INTERCEPTION"), sacks_taken = sum(pff_PASSRESULT == "SACK"), sack_yds_lost = sum(sack_yardage),
+            passer_rating = round((((((completions/pass_attempts)-.3)*5) + (((passing_yards/pass_attempts)-3)*.25) + ((passing_touchdowns/pass_attempts)*20) +
+              (2.375-((intercpetions/pass_attempts)*25)))/6)*100,1))
+
+#kickoffs
+kickoffs <- plays %>% filter(pff_SPECIALTEAMSTYPE == "KICKOFF") %>% mutate(touchback = ifelse(pff_KICKRESULT == "TOUCHBACK",1,0)) %>% group_by(pff_DEFTEAM) %>% summarise(kickoffs = n(), touchbacks = sum(touchback))
+
+kickoff_rets <- plays %>% filter(pff_SPECIALTEAMSTYPE == "KICKOFF") %>% group_by(pff_OFFTEAM) %>% filter(!(is.na(pff_RETURNYARDS))) %>%
+  summarise(kickoff_ret_yds = sum(pff_RETURNYARDS, na.rm = T), kickoff_ret_long = max(pff_RETURNYARDS), kickoff_returns = n())
+
+kickoffs_final <- kickoff_rets %>% left_join(kickoffs, by=c('pff_OFFTEAM'='pff_DEFTEAM'))
+#punts
+punts <- plays %>% filter(pff_SPECIALTEAMSTYPE == "PUNT") %>% group_by(pff_OFFTEAM) %>% summarise(punts = n(), punt_yards = sum(pff_KICKYARDS)) %>%
+  add_row(pff_OFFTEAM = "PHI", punts = 0, punt_yards = 0) #manually adding Dallas since they had no punts
+#punt return yards
+plays %>% filter(pff_SPECIALTEAMSTYPE == "PUNT") %>% group_by(pff_DEFTEAM) %>% summarise(punt_ret_yds = sum(pff_RETURNYARDS, na.rm = T)) #no return yards so going to manually add it to the above data frame
+punt_ret_yds <- c(0,0)
+punts <- cbind(punts, punt_ret_yds)
+#combining summaries 
+offense_summary <- pass_plays_sum %>% left_join(run_plays_sum,by = join_by(pff_OFFTEAM)) %>% left_join(num_plays,by = join_by(pff_OFFTEAM)) %>%
+  left_join(penalties, by=c('pff_OFFTEAM'='penalty_team')) %>% left_join(turnovers_df, by = join_by(pff_OFFTEAM)) %>%
+  left_join(red_zone_df, by = join_by(pff_OFFTEAM)) %>% left_join(thrd_frth_df, by = join_by(pff_OFFTEAM)) %>%
+  left_join(first_downs, by = join_by(pff_OFFTEAM)) %>% left_join(pat_attempts_df, by = join_by(pff_OFFTEAM)) %>%
+  left_join(two_point_df, by = join_by(pff_OFFTEAM)) %>% left_join(field_goals, by = join_by(pff_OFFTEAM)) %>%
+  left_join(touchdown_total, by=c('pff_OFFTEAM'='team_touchdown')) %>% left_join(top_final, by = join_by(pff_OFFTEAM)) %>%
+  left_join(kickoffs_final, by = join_by(pff_OFFTEAM)) %>% left_join(punts, by = join_by(pff_OFFTEAM)) %>%
+  mutate(offensive_yards = rush_yards + passing_yards, yards_per_play = round(offensive_yards/plays,1))
+#getting final score
+final_score <- plays %>% slice(n()) %>% select(pff_DEFTEAM, pff_DEFSCORE, pff_OFFTEAM, pff_OFFSCORE)
+cowboys_score <- final_score %>% select(pff_OFFTEAM,pff_OFFSCORE) %>% rename(score = pff_OFFSCORE)
+eagles_score <- final_score %>% select(pff_DEFTEAM,pff_DEFSCORE) %>% rename(pff_OFFTEAM=pff_DEFTEAM,score = pff_DEFSCORE)
+final_score_df <- rbind(cowboys_score, eagles_score)
+#looking at offensive summary
+offense_summary <- offense_summary %>% left_join(final_score_df, by = join_by(pff_OFFTEAM))
+offense_summary %>% gt()
+```
+
+Defensive Summaries
+
+```{r}
+#getting interception return yards
+int_yards_df <- plays %>% filter(grepl("intercepted",tolower(PlayDescription))==TRUE) %>% 
+  mutate(int_yards = sub(".*intercepted ", "", tolower(PlayDescription))) %>%
+  mutate(int_yards = sub(".*for ", "", tolower(PlayDescription)))
+
+int_yards_final <- int_yards_df %>% mutate(int_yards = sub(" yards.*", "", tolower(int_yards))) %>%
+  mutate(int_yards = ifelse(grepl("no gain",tolower(PlayDescription)) == TRUE,0,int_yards)) %>%
+  mutate(int_yards = as.numeric(int_yards)) %>% mutate(pick_6 = ifelse(pff_DRIVEENDEVENT == "INTERCEPTION-TD",1,0)) %>% group_by(pff_DEFTEAM) %>% summarise(int_ret_yards = sum(int_yards), pick_sixes = sum(pick_6))
+         
+#fumbles
+fumbles_df <- defense %>% mutate(pff_FORCEDFUMBLE = ifelse(pff_FORCEDFUMBLE == "Y",1,0), pff_FUMBLERECOVERED = ifelse(pff_FUMBLERECOVERED == "Y",1,0)) %>%
+  group_by(pff_TEAM) %>% summarise(forced_fumbled = sum(pff_FORCEDFUMBLE, na.rm = T), recovered_fumbles = sum(pff_FUMBLERECOVERED, na.rm = T))
+
+#sacks
+sacks_df <- plays %>% mutate(sack_yards = ifelse(plays$pff_PASSRESULT == "SACK",abs(plays$pff_GAINLOSSNET),0)) %>%
+  group_by(pff_DEFTEAM) %>% summarise(sack_yards = sum(sack_yards, na.rm = T), sacks = sum(pff_PASSRESULT == "SACK", na.rm = T))
+
+#defense summary
+deffense_summary <- defense %>% mutate(pff_PASSBREAKUP = ifelse(pff_PASSBREAKUP == "Y",1,0), pff_INTERCEPTION = ifelse(pff_INTERCEPTION == "Y",1,0),
+                   pff_DROPPEDINTERCEPTION = ifelse(pff_DROPPEDINTERCEPTION == "Y",1,0)) %>%
+  group_by(pff_TEAM) %>% summarise(pass_breakups = sum(pff_PASSBREAKUP, na.rm = T), pass_interceptions = sum(pff_INTERCEPTION, na.rm = T),
+                                   dropped_ints = sum(as.numeric(pff_DROPPEDINTERCEPTION), na.rm = T)) %>%
+  left_join(int_yards_final, by=c('pff_TEAM'='pff_DEFTEAM')) %>% left_join(fumbles_df, by=join_by(pff_TEAM)) %>%
+  left_join(sacks_df, by=c('pff_TEAM'='pff_DEFTEAM'))
+#looking at defense summary
+deffense_summary %>% gt()
+```
+
+Final team summary stats
+```{r}
+team_summary_df <- deffense_summary %>% left_join(offense_summary, by=c('pff_TEAM'='pff_OFFTEAM'))
+#looking at full team summary 
+team_summary_df %>% gt()
+```
+
+By Player summary stats offense
+```{r, message=FALSE}
+#getting player passing stats
+qbs_df <- offense %>% filter(pff_POSITION == "QB", pff_NOPLAY == 0) %>% left_join(pass_plays, by = join_by(pff_PLAYID))
+qbs_df$pass_touchdown <- ifelse((qbs_df$pff_ROLE == "Pass")&(qbs_df$pff_TOUCHDOWN.x == "Y"),1,0)
+
+qb_summary <- qbs_df %>% group_by(PlayerName) %>% summarise(pass_yards = sum(pff_PASSINGYARDS, na.rm = T), attempts = sum(attempt, na.rm = T),
+                                              completions = sum(pff_PASSRESULT == "COMPLETE", na.rm = T),
+                                              intercpetions = sum(pff_PASSRESULT == "INTERCEPTION", na.rm = T),
+                                              longest_pass = max(pff_PASSINGYARDS, na.rm = T), sacks_taken = sum(pff_PASSRESULT == "SACK", na.rm = T),
+                                              touchdowns = sum(pass_touchdown, na.rm = T))
+
+passing_players <- qb_summary %>%
+  mutate(passer_rating = round((((((completions/attempts)-.3)*5) + (((pass_yards/attempts)-3)*.25) + ((touchdowns/attempts)*20) +(2.375-((intercpetions/attempts)*25)))/6)*100,1), yards_per_attempt = round(pass_yards/attempts,1), comp_pct = round(completions/attempts,3)*100)
+#looking at passing players
+passing_players %>% gt()
+
+#getting player rushing stats
+rushing_df <- offense %>% filter(is.na(pff_RUSHINGYARDS) == FALSE, pff_NOPLAY == 0)
+rushing_summary <- rushing_df %>% group_by(PlayerName) %>% summarise(carries = n(),rush_yards = sum(pff_RUSHINGYARDS), yards_per_carry = round(rush_yards/carries,1),
+                                                  touchdowns = sum((pff_TOUCHDOWN == "Y") == TRUE,na.rm = T), longest_run = max(pff_RUSHINGYARDS, na.rm = T),
+                                                  fumbles_lost = sum((pff_FUMBLE == "Y") == TRUE,na.rm = T))
+#looking at rushing stats
+rushing_summary %>% gt()
+
+#getting player receiving stats
+receiving_df <- offense %>% filter(is.na(pff_RECEIVINGYARDS) == FALSE, pff_NOPLAY == 0)
+receiving_summary <- receiving_df %>% group_by(pff_TEAM,PlayerName) %>% summarise(receiving_yards = sum(pff_RECEIVINGYARDS), receptions = n(),
+                                                             longest_rec = max(pff_RECEIVINGYARDS, na.rm = T),
+                                                             touchdowns = sum((pff_TOUCHDOWN == "Y") == TRUE,na.rm = T))
+#getting target and other receiving stats
+players_w_rec_yards <- offense %>% filter(PlayerName %in% receiving_summary$PlayerName, pff_NOPLAY == 0)
+
+targets_df <- players_w_rec_yards %>% group_by(pff_TEAM, PlayerName) %>% summarise(targets = sum((pff_TARGETEDRECEIVER == "Y") == TRUE,na.rm = T))
+
+#merging two receiving data frames to get final stats
+receiving_summary <- receiving_summary %>% left_join(targets_df, by = join_by(PlayerName, pff_TEAM)) %>%
+  mutate(yards_per_target = round(receiving_yards/targets,1), yards_per_reception = round(receiving_yards/receptions,1))
+#looking at receiving summary
+receiving_summary %>% gt()
+```
+
+By player stats defense
+```{r, warning=FALSE, message=FALSE}
+#making columns able to add - changing character to numeric
+defense <- defense %>% mutate(pff_TACKLE = ifelse(pff_TACKLE == "Y",1,0), asst_tackle = ifelse(pff_ASSIST == "Y",1,0), sack = ifelse(pff_SACK == "Y",1,0),
+                              pff_FORCEDFUMBLE = ifelse(pff_FORCEDFUMBLE == "Y",1,0), pff_INTERCEPTION = ifelse(pff_INTERCEPTION == "Y",1,0),
+                              pff_TOUCHDOWN = ifelse(pff_TOUCHDOWN == "Y",1,0), pff_BATTEDPASS = ifelse(pff_BATTEDPASS == "Y",1,0),
+                              pff_PASSBREAKUP = ifelse(pff_PASSBREAKUP == "Y",1,0))
+#getting plays where sacks occured
+sack_plays <- defense %>% group_by(pff_PLAYID) %>% summarise(players_w_sack = sum(sack, na.rm = T))
+
+defense <- defense %>% left_join(sack_plays, by = join_by(pff_PLAYID))
+
+#replacing NA's with 0's in sack column
+defense$sack <- ifelse(is.na(defense$sack),0,defense$sack)
+
+#getting the sack total of players
+defense$sack_total <- ifelse((defense$players_w_sack < 2) & (defense$sack == 1),1,
+                             ifelse((defense$players_w_sack > 1)&(defense$sack == 1),0.5,0))
+#making defensive player summary stats
+player_summary_def <- defense %>% filter(pff_NOPLAY == 0,special_teams == 0) %>% group_by(pff_TEAM, PlayerName) %>%
+  summarise(tackles = sum(pff_TACKLE, na.rm = T), asst_tackles = sum(asst_tackle, na.rm = T),
+            tot_tackles = tackles+asst_tackles, sacks = sum(sack_total, na.rm = T), forced_fumbles = sum(pff_FORCEDFUMBLE, na.rm = T),
+            interceptions = sum(pff_INTERCEPTION, na.rm = T), touchdowns = sum(pff_TOUCHDOWN, na.rm = T),
+            batted_passes = sum(pff_BATTEDPASS, na.rm = T), pass_breakups = sum(pff_PASSBREAKUP, na.rm = T))
+#looking at player summary for defense
+player_summary_def %>% gt()
+```
+
+Lastly, getting offensive line summary stats
+```{r, warning=FALSE, message=FALSE}
+#making data frame for offensive linemen
+oline <- offense %>% filter(PosGroup == "OL", pff_NOPLAY == 0, special_teams == 0)
+
+oline <- oline %>% mutate(pff_HITALLOWED = ifelse(pff_HITALLOWED == "Y",1,0), pff_HURRYALLOWED = ifelse(pff_HURRYALLOWED == "Y",1,0),
+                 pff_PRESSUREALLOWED = ifelse(pff_PRESSUREALLOWED == "Y",1,0), pff_SACKALLOWED = ifelse(pff_SACKALLOWED == "Y",1,0),
+                 pff_SCREENBLOCK = ifelse(pff_SCREENBLOCK == "Y",1,0))
+
+oline_summary <- oline %>% group_by(pff_TEAM, PlayerName) %>% summarise(hits_allowed = sum(pff_HITALLOWED, na.rm = T), hurries_allowed = sum(pff_HURRYALLOWED, na.rm = T), pressures_allowed = sum(pff_PRESSUREALLOWED, na.rm = T), sacks_allowed = sum(pff_SACKALLOWED, na.rm = T), screen_blocks = sum(pff_SCREENBLOCK, na.rm = T))
+#looking at offensive line stats
+oline_summary %>% gt()
+```
+
+2). What worked for each team and what didn't? Was there something a team should have done differently?
+
+Looking at how well these temas did on Third Downs
+```{r}
+third_downs <- plays %>% filter(Down == 3, pff_NOPLAY == 0)
+third_downs$pff_FIRSTDOWNGAINED <- ifelse(is.na(third_downs$pff_FIRSTDOWNGAINED) == TRUE,0,third_downs$pff_FIRSTDOWNGAINED)
+#creating an indicator that shows short, medium, and long situations
+#short is defined as 0-3 yards to go, medium is defined as 4-7 yards to go, and long is defined as 8 yards or more
+third_downs$to_go_situation <- ifelse(third_downs$YardsToGo < 4,"Short",
+                                      ifelse(third_downs$YardsToGo > 3 & third_downs$YardsToGo < 8,"Medium",
+                                             ifelse(third_downs$YardsToGo > 7, "Long",NA)))
+third_down_summary <- third_downs %>% group_by(pff_OFFTEAM, pff_RUNPASS, to_go_situation) %>% summarise(attempts = n(), firsts = sum(pff_FIRSTDOWNGAINED, na.rm = T), .groups = "keep")
+
+#getting percent
+third_down_summary <- third_down_summary %>% mutate(pct = round(firsts/attempts,2)*100)
+third_down_summary
+#third downs are a huge and very important part of the game. You need to convert on third downs to keep possesion of the ball and have control of the game. Dallas was very good in 3 and long situations. They were 2 for 3, which is a huge momentum swing each time they convert. They only passed in these situations but only missing on one the whole game is very impressive. When looking at how each team performed on third and mediums both teams only passed the ball. Philly however, was a lot more successful with converting 5 out of their 6 attempts, while the Cowboys were 5 for 9. In the case of the Cowboys, running once or twice during these situations probably would have made them less predictable and maybe even converted on one or two of them. In terms of third and short situations Philly ran on all 3 and only converted 1, while the Cowboys passed on 2 and converted 1, and ran 1 but did not get the first. I feel that Philly could have done better in the third and short situations since they ran the ball every time. Mayve running an RPO or a play action could have thrown the Cowboys defense off guard and they could've converted on more of them.
+```
+
+Looking at how well these teams did on First downs
+```{r}
+#gettng first down plays
+first_downs <- plays %>% filter(Down == 1, pff_NOPLAY == 0)
+
+#defining results of play
+#loss will be defined as no gain or loss of yards, 3 yards or less will be defined as little_gain, more than 3 yards will be defined as good gain
+first_downs$gain_type <- ifelse(first_downs$pff_GAINLOSS < 1|is.na(first_downs$pff_GAINLOSS) == TRUE,"Loss",
+                                ifelse(first_downs$pff_GAINLOSS > 0 & first_downs$pff_GAINLOSS < 4,"Small Gain",
+                                       ifelse(first_downs$pff_GAINLOSS > 3, "Good Gain",NA)))
+
+first_downs_sum <- first_downs %>% group_by(pff_OFFTEAM, pff_RUNPASS ,gain_type) %>% summarise(count = n(), .groups = "keep") %>% ungroup()
+
+first_downs_sum <- first_downs_sum %>% group_by(pff_OFFTEAM, pff_RUNPASS) %>% mutate(total_RP = sum(count), pct = round(count/total_RP,2)*100)
+
+first_downs_sum
+#When passing on first down the Cowboys got a good gain 50% of the time and a loss 50% of the time. To me this is solid since you're not necessarily trying to get a first down every time on first down. But knowing that they got at least 4 yards 50% of the time when passing the ball on first is solid. When running the ball on first down the Cowboys had a good gain 29% of the time, a loss 29% of the time, and a small gain 41% of the time. To me this seems pretty average since a defense on first down usually is aiming to defend the run, and given that they Cowboys gained yardage on 70% on runs on first downs, I would think that's pretty impressive. Also they were pretty much 50/50 on whether than ran or passed the ball on first down, which is really good to keep the defense guessing. 
+
+#When passing on first down the eagles had a good gain 56% percent of the time while having a loss 38% of the time and a small gain 6% of the time. This is a bit better than it was for the Cowboys, and it does seem that the Eagles had a lot of success throwing it on first down. They gained more yards than they lost when passing so sticking to the pass game on firsts seems like a good option. When running on first downs the Eagles had a good gain 53% of the time, while having a loss 20% of the time, and a small gain 27% of the time. This is also very good, given that every time they ran the ball on first down they got at least a positive gain 80% of the time. However, given that they had at least 4 yards on a run play 53% of all their first downs leads me to believe that the Cowboys were playing a "bend but don't break" defense. This is probably because Jalen Hurts was out, who is a big part of the Eagles run game normally, and i'm guessing they didn't respect their running backs alone, so they decided to play the pass more on first downs rather than the run. I'm going to observe this more closely below.
+
+#making R run and P pass in data frame
+first_downs_sum$pff_RUNPASS <- ifelse(first_downs_sum$pff_RUNPASS == "P","Pass","Run")
+#getting data frame for Eagles
+eagles_first <- first_downs_sum %>% filter(pff_OFFTEAM == "PHI")
+#getting data frame for Cowboys
+cowboys_first <- first_downs_sum %>% filter(pff_OFFTEAM == "DAL")
+
+#creating plot for cowboys
+ggplot(cowboys_first, aes(x = gain_type, y = pct, fill = pff_RUNPASS)) + geom_bar(stat = "identity", position = "dodge") +
+  ylab("Percentage (%)") + xlab("Gain Type") + ggtitle("The Cowboys Percentage of Types of Gains on First Downs for Run and Pass plays ")+ guides(fill=guide_legend(title="Run or Pass"))+geom_text(aes(label=paste(round(pct),"%",sep ="")), vjust = 1.5,
+             position = position_dodge(.9), size = 4, colour = "white") + theme(panel.border = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  # Change axis line
+  axis.line = element_line(colour = "black"),
+  plot.title = element_text(face="bold", size=11)) + scale_fill_manual(values = c("Pass" = "Dark Blue",
+                                                                                  "Run" = "gray"))
+
+#creating plot for eagles
+ggplot(eagles_first, aes(x = gain_type, y = pct, fill = pff_RUNPASS)) + geom_bar(stat = "identity", position = "dodge") +
+  ylab("Percentage (%)") + xlab("Gain Type") + ggtitle("The Eagles Percentage of Types of Gains on First Downs for Run and Pass plays ")+ guides(fill=guide_legend(title="Run or Pass"))+geom_text(aes(label=paste(round(pct),"%",sep ="")), vjust = 1.5,
+             position = position_dodge(.9), size = 4, colour = "White") + theme(panel.border = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  # Change axis line
+  axis.line = element_line(colour = "black"),
+  plot.title = element_text(face="bold", size=11)) + scale_fill_manual(values = c("Pass" = "Dark Green",
+                                                                                  "Run" = "black"))
+```
+
+Looking at defensive formations on first downs for the cowboys
+```{r}
+dal_def_first <- first_downs %>% filter(pff_DEFTEAM == "DAL")
+dal_def_first_count_df <- dal_def_first %>% group_by(DefPers) %>% summarise(count = n())
+total <- sum(dal_def_first_count_df$count)
+dal_def_first_count_df <- dal_def_first_count_df %>% mutate(total = total)
+dal_def_first_count_df <- dal_def_first_count_df %>% mutate(pct = round(count/total,3)*100)
+ggplot(dal_def_first_count_df, aes(x = reorder(DefPers,pct), y = pct)) + geom_bar(stat = "identity", fill = "dark blue") + coord_flip() + xlab("") + ylab("Percentage (%)") + ggtitle("Cowboys Percentage of Defensive Formations on First Downs") + geom_text(aes(label=paste(round(pct),"%",sep ="")), hjust = 1.2, size = 4, colour = "white") + theme(panel.border = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  # Change axis line
+  axis.line = element_line(colour = "black"),
+  plot.title = element_text(face="bold", size=15))
+#As you can see, the Cowboys on first downs always ran with max only 6 players in the box. Also they only had 3 defensive linemen on 87% of all first downs, which leaves the run game very open. This confirms my assumptions from above.
+```
+
+getting micach parsons 
+```{r}
+micah_parsons <- defense %>% filter(PlayerID == 53441)
+#getting offensive positions and id's
+block_group <- offense %>% select(PlayerID, PosGroup) %>% distinct()
+#joining data
+micah_parsons <- micah_parsons %>% left_join(block_group, by=c('BlockID'='PlayerID'))
+#seeing what position groups blocked Micah Parsons the Most
+micah_parsons_sum <- micah_parsons %>% group_by(PosGroup) %>% summarise(total = n()) %>% mutate(PosGroup = ifelse(is.na(PosGroup) == TRUE,"Unblocked",PosGroup))
+#getting snaps total
+snaps <- sum(micah_parsons_sum$total)
+#getting percentage
+micah_parsons_sum %>% mutate(snaps = snaps, pct = round(total/snaps,2)*100) %>%
+  ggplot(aes(x = reorder(PosGroup,pct), y = pct)) + geom_bar(stat = "identity", fill = "dark blue") + coord_flip() + xlab("") + ylab("Percentage (%)") + ggtitle("Percentage of Positions that Accounted for Blocking Micah Parsons") + geom_text(aes(label=paste(round(pct),"%",sep ="")), hjust = 1.2, size = 4, colour = "white") + theme(panel.border = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  # Change axis line
+  axis.line = element_line(colour = "black"),
+  plot.title = element_text(face="bold", size=12))
+
+#in my opinion, only blocking Micah Parsons (one of the best defensive players in the league and best on the cowboys) with an offensive linemen 72% of his snaps is not ideal, and something that I think the Eagles could have improved upon. Especially in late game situations, making sure that he is accounted for by the best blockers on your team is essential. Otherwise in big situations, he will most likely make big plays. This can be seen late in the fourth quarter when he blew by Dallas Goedert (TE) and ultimately created a lane for his teammate to force a fumble, which pretty much sealed the game for the Cowboys.
+```
+
+3). What was the deciding factor in the game? In other words, what play(s) or other characteristic(s) of the game had the biggest impact on the outcome?
+
+Using win probability to determine what plays had the biggest impact on the outcome of the game
+```{r}
+#getting win probability from after play
+plays <- plays %>% mutate(win_prob_after_play = lead(WP))
+#getting difference of win probabilities of before and after play to see whch plays had biggest impact
+plays <- plays %>% mutate(wp_diff = abs(win_prob_after_play - WP))
+#getting plays with biggest win probabilities
+plays %>% filter(wp_diff > .15) %>% arrange(-wp_diff) %>% select(pff_QUARTER, pff_CLOCK, pff_DEFSCORE, pff_OFFSCORE, PlayDescription, wp_diff) %>% gt()
+#below are the top 5 plays that had the biggest impact of the game according to the win probability stat that was calculated
+
+#the most impactful play of the game happened in the third quarter when the Eagles were up 20-27. They had just held the Cowboys to a field goal and got a first down from a penalty on the Cowboys. They had the ball on their own 39 and it seemed everything was going there way. All they had to do was drain clock and try to score, however on First down Gardner Minshew fumbled the ball on a bad hand off to Miles Sanders which put the Cowboys into great field position with only needing a touchdown to tie up the game.
+
+#the second most impactful play happened in the fourth quarter, when the Cowboys had the ball down 7 with 8 minutes to go in the game. They were in a very poor situation, a 3rd and 30, in their own territory. It seemed that all hope was lost until Dak Prescott launched a 52 yard bomb to the veteran T.Y Hilton to get them to the Eagles 19 yard line! This changed all the momentum the Eagles had and put the Cowboys right into scoring position.
+
+#the third most impactful play happened in the fourth quarter. The Eagles had the ball in Dallas territory in a tie ball game with 4:24 left remaining in the game. It was 3rd and 4 and the Eagles decided to pass the ball with their backup QB and it ended up being intercepted. The Eagles had a great opportunity to take the lead late in the game but then gave the ball back to the Cowboys with not a lot of time remaining. All the Cowboys had to do now was just wind down the clock and take the lead.
+
+#the fourth most impactful play happened in the first quarter. The Cowboys had the ball at their own 47, down 3-0 with 9:28 remaining in the first. It was first and 10 and Dallas decided to run a pass play, unfortunatley for them it was intercepted by Josh Sweat and returned all the way for a touchdown to put the Eagles up 10-0.
+
+#the fifth and final most impactful play I'll be going over happened in the fourth quarter. The Cowboys had just scored a field goal to put them up 37-34. The Eagles then started their drive at their own 25 yard line with only 2:19 remaining in the game. On first and 10 the Eagles ran the ball but Micah Parsons blew by Dallas Goedert to disrupt the play in the backfield which opened up a lane for Carlos Watkins to punch the ball out from Miles Sanders and force a fumble which the Cowboys then recovered. This play pretty much sealed the game for Dallas.
+```
+
+
+4). Which players had the largest impact negatively or positively on their unit? Identify the best and worst performers for each teams' offense and defense.
+
+Looking at what player performed best offensively based on PFFVAR and EPAR
+```{r}
+best_off_perf <- offense %>% filter(pff_NOPLAY == 0, is.na(PFFVAR) == FALSE) %>% group_by(pff_TEAM,PlayerName) %>% summarise(snaps = n(),PFFVAR_avg = sum(PFFVAR)/snaps, EPAR_avg = sum(EPAR)/snaps, EPAR_PFFVAR_avg = (EPAR_avg+PFFVAR_avg)/2, .groups = "keep")
+
+mean(best_off_perf$snaps)
+#looking at players with 20 or more snaps on offense 
+best_off_perf %>% filter(snaps > 19) %>% arrange(-EPAR_PFFVAR_avg)
+
+#the top 3 best performers with at least 20 snaps on Dallas's offense were Dak Prescott, Ceedee Lamb, Tony Pollard
+
+#the worst 3 performers with at least 20 snaps on Dallas's offense were Michael Gallup, Noah Brown, Connor McGovern
+
+#the top 3 best performers with at least 20 snaps on Philadelphia's offense were Devonta Smith, Gardner Minshew, A.J Brown
+
+#the worst  3 best performers with at least 20 snaps on Philadelphia's offense were Miles Sanders, Quez Watkins, Jordan Mailata
+
+```
+
+Looking at what player performed best defensively based on PFFVAR and EPAR
+```{r}
+best_def_perf <- defense %>% filter(pff_NOPLAY == 0, is.na(PFFVAR) == FALSE) %>% group_by(pff_TEAM,PlayerName) %>% summarise(snaps = n(),PFFVAR_avg = sum(PFFVAR)/snaps, EPAR_avg = sum(EPAR)/snaps, EPAR_PFFVAR_avg = (EPAR_avg+PFFVAR_avg)/2, .groups = "keep") 
+
+mean(best_def_perf$snaps)
+#looking at players with 18 or more snaps on offense 
+best_def_perf %>% filter(snaps > 17) %>% arrange(-EPAR_PFFVAR_avg)
+
+#the top 3 best performers with at least 18 snaps on Dallas's defense were Nahshon Wright, Carlos Watkins, and Donovan Wilson
+
+#the worst 3 performers with at least 18 snaps on Dallas's defense were Trevon Diggs, Neville Gallimore, Dorance Armstrong
+
+#the top 3 best performers with at least 18 snaps on Philadelphia's defense were Josh Sweat, Avonte Maddox, Haason Reddick
+
+#the worst  3 best performers with at least 18 snaps on Philadelphia's defense were Reed Blankenship, Marcus Epps, Kyzir White
+```
+
+5). Include at least 1 visualization to highlight a key insight.
+
+6). How would you communicate your main takeaways to decision-makers (coaches, personnel directors, or the General Manager)? In other words, how would you succinctly tell them what they needed to know?
+
+7). Provide any code you used to answer the above questions.
