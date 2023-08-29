@@ -1,0 +1,13 @@
+name: SwingChart
+title: SwingChart
+username:
+account: aepesant
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 1428850
+bundleId: 2586775
+url: https://aepesant.shinyapps.io/SwingChart/
+when: 1573669602.32468
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: august2018.csv|masterid.csv
