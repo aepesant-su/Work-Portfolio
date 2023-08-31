@@ -1,0 +1,911 @@
+---
+title: "Analysis of Airport Customer Survey Responses"
+author: 'Alejandro Pesantez'
+date: "2022-12-11"
+output:
+  html_document: default
+  pdf_document: default
+---
+## Overview
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+# load libraries
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(zoo)
+library(tidyr)
+library(knitr)
+library(poLCA) 
+library(tidytext)
+library(sentimentr)
+library(stm)
+library(tm) 
+library(psych) 
+library(wordcloud)
+library(corrplot) 
+library(factoextra)
+library(randomForest)
+```
+
+This report is an evaluation of our team's findings for the SFO team using the `SFO_survey_withText.txt` dataset. The dataset represents San Francisco International Airport 2010 Customer Survey responses. We discuss the methods, relevant EDA along with any helpful visuals, articulate how we address the questions, present results, interpret findings, and conclusions. Initially, we perform EDA and data cleaning on the dataset before conducting any analysis.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+# load data
+data = read.table("SFO_survey_withText.txt", header = TRUE, sep = "", dec = ".")
+```
+
+## Exaploratory Data Analysis (EDA)
+
+We performed light EDA by examining the percentage of missing values within the dataset. We found that 38 variables were missing more than 70% of their overall data along with 2 additional variables missing roughly 53% and 20% of their data as well. This left 61 variables with only missing less than 9% of their data. 
+```{r, warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+#computes and filters the percentage of missing data from each variable
+colSums(is.na(data[colSums(is.na(data)/dim(data)[1]) > 0.3])/dim(data)[1]*100) # all miss greater than 70%, except for `Q7COM1` with 53%
+colSums(is.na(data[colSums(is.na(data)/dim(data)[1]) <= 0.3])/dim(data)[1]*100) # all miss less than 9%, except for `Q19`with 20%
+```
+We decided variables with less than 9% of missing data to remain in the final dataset along with the inclusion of `Q19`, whom has 20% of missing data. This is variable represents customer's Household income, which we will later need to examine whether it has potential influence on customer's satisfactory at SFO on a whole.
+
+
+## Data-preprocessing
+
+During data-preprocessing, all variables that had more than 10% of missing data were removed from the final dataset to perform data analysis with the exception for `Q19`. Instead of removing NA values, we aggregated their means by columns for each desirable variable used in the final analysis in respect to each section for Part A.
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+# Final data.frame for Part A section
+data_tidy <- data[colSums(is.na(data)/dim(data)[1]) <= 0.3] #%>% na.omit()
+# Data.frame for A.1.
+dfa1 <- round(data_tidy %>% dplyr::select(c(Q6N, Q17, Q18, Q19)) %>% na.aggregate(),0)
+# Data.frame for A.2.
+dfa2 <- round(data_tidy %>% dplyr::select(c(Q6A:Q6N)) %>% na.aggregate(),0)
+# Data.frame for A.3.
+dfa3 <- data
+```
+We removed any customers that left a blank, whom were not applicable, refused, or did not specified there response, which was a total of only 31 customers. Note that 29 of those individuals had reported they were not applicable as their rating response.
+
+
+## Part A - Address the Primary Questions of Interest for the SFO Executives
+
+In Part A Section, the SFO team have three (3) specific questions they had wanted the team to investigate.
+
+### A.1.
+For `A.1.`, knowing that customers were asked to rate their opinion of the "SFO Airport as a whole" on a scale from 1 ("unacceptable") to 5 ("outstanding"). The executives want to know if there are patterns across the satisfied or dissatisfied customers based on demographic characteristics, such as sex, age group, and income level.
+
+#### Data Pre-processing
+Initially, we performed more EDA by performing a univariate and multivariate analysis to examine the variables distributions along with their relationships to one another before conducting Latent Class Analysis (LCA). For better visualization, we created factorized variables on the desired variables used within this analysis. The following variables we had factored were gender, age group, household income level, and customer ratings on SFO airport. 
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+# Response filterization
+dfa1 <- dfa1 %>% filter(Q6N != 0, Q17 !=0, Q18 !=0, 19 !=0, 
+                        Q6N != 6, Q17 != 8, Q19 !=5) 
+# Create factor variables for each variable:
+  # customer ratings
+dfa1$Q6N_factor <- factor(as.factor(dfa1$Q6N), levels = c(1,2,3,4,5), labels = c("Unacceptable","Below-Average","Average","Above-Average","Outstanding"))
+  # age group
+dfa1$Q17_factor <- factor(as.factor(dfa1$Q17), levels = c(1,2,3,4,5,6,7), labels = c("< 18","18-24","25-34","35-44","45-54","55-64","65 =<"))
+  # gender
+dfa1$Q18_factor <- factor(as.factor(dfa1$Q18), levels = c(1,2), labels = c("Male","Female"))
+  # income level
+dfa1$Q19_factor <- factor(as.factor(dfa1$Q19), levels = c(1,2,3,4), labels = c("< 50k", "50k-100k", "100k-150k","150k <"))
+# Create customer rating type variable
+dfa1$binary_rating <- dfa1$Q6N_factor
+levels(dfa1$binary_rating) <- c("Dissatisfied","Dissatisfied","Dissatisfied","Satisfied","Satisfied")
+```
+
+
+#### EDA
+For our univariate analysis, we examined the distribution for each variable independently using a barplot. We noticed the data is heavier weighted on customer ratings with `Above-Average` experience at the SFO airport. As for the demographic characteristics in the customer basis, we notice the data to have 11% more males than females with the peak age group lying between 25 to34 and household income from `$50,000` to `$100,000`. 
+
+Due to the large disproportionate number of responses for customer ratings reporting `Unacceptable` and  `Below-Average`, we decided to define the customers whom rated `Average` and below to be dissatisfied, while responses reporting `Above-Average` and greater were classified as satisfied.
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+## univariate analysis
+# Distribution of customer's rating 
+ggplot(dfa1, aes(x=Q6N_factor)) + geom_bar() + geom_text(stat='count', aes(label=..count..), vjust = -1)  + xlab( "Ratings for SFO as a whole") + ggtitle("Distribution of Customer Ratings on SFO on a whole") + ylim(0,2000)
+
+# Distribution of age
+ggplot(dfa1, aes(x=Q17_factor)) + geom_bar() + geom_text(stat='count', aes(label=..count..), vjust = -1)  + xlab("Range of Age Group (in years)")  + ggtitle("Distribution of Customer's Age Group") + ylim(0,800)
+
+# Distribution of gender
+ggplot(dfa1, aes(x=Q18_factor)) + geom_bar() + geom_text(stat='count', aes(label=..count..), vjust = -1) + xlab("Gender")  + ggtitle("Distribution of Customer's Gender") + ylim(0,2000)
+
+# Distribution of household income level
+ggplot(dfa1, aes(x=Q19_factor)) + geom_bar() + geom_text(stat='count', aes(label=..count..), vjust = -1) + xlab("Range in Household Income (in US Dollars)")  + ggtitle("Distribution of Customer's Household Income") + ylim(0,1750)
+
+# Distribution of customer's binary rating
+ggplot(dfa1, aes(x=binary_rating)) + geom_bar() + geom_text(stat='count', aes(label=..count..), vjust = -1)  + xlab("Customer Type")  + ggtitle("Distribution of Customer's Rating Classification") + ylim(0,2750)
+```
+
+
+For our bivariate analysis, we examined the relationships among customers rating being binary of Satisfied or Dissatisfied among their demographic characteristics using a table and barplots. Please note that each of the reported numbers for the bars are labeled inversely, where the bottom number reports the top region representing dissatisfied customers and the top number reports the bottom region representing satisfied customers.
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+## bivariate analysis
+# Distribution of age
+ggplot(dfa1, aes(x=Q17_factor, fill = binary_rating)) + geom_bar() + geom_text(stat='count', aes(label=..count..), vjust = -1)  + xlab("Range of Age Group (in years)")  + ggtitle("Distribution of Customer's Age Group") + ylim(0,800)
+
+# Distribution of gender
+ggplot(dfa1, aes(x=Q18_factor, fill = binary_rating)) + geom_bar() + geom_text(stat='count', aes(label=..count..), vjust = -1) + xlab("Gender")  + ggtitle("Distribution of Customer's Gender") + ylim(0,2000)
+
+# Distribution of household income level
+ggplot(dfa1, aes(x=Q19_factor, fill = binary_rating)) + geom_bar() + geom_text(stat='count', aes(label=..count..), vjust = -1) + xlab("Range in Household Income (in US Dollars)")  + ggtitle("Distribution of Customer's Household Income") + ylim(0,1750)
+
+# Rename colnames 
+# Note that Q6N = customer_rating, Q18 = gender, Q17 = age group, Q19 = income level
+colnames(dfa1) <- c('Rating_num','AgeGroup_num','Gender_num','IncomeLevel_num','Rating_fa','AgeGroup_fa','Gender_fa','IncomeLevel_fa', 'BinaryRating')
+
+## Multivariate analysis
+dfa1 %>% group_by(BinaryRating, Gender_fa, AgeGroup_fa, IncomeLevel_fa) %>% summarise(n=n())
+```
+
+Based on the results, we noticed the trend among satisfied and dissatisfied customers remain the same for each demographic characteristic sub-group with the exception for customer's household income levels. Although both customer groups are mostly represented by household incomes of `$50,000` to `$100,000`, the second highest representing group for satisfied customers are those whom make under `$50,000`, while for dissatisfied customers are those whom make over `$150,000`. This possibly suggests that customer ratings may be more influenced by customer's household incomes rather than their gender of age group.
+
+Using the table, we find large clustering of classes being accounted for now suggesting these variables would be best used for Latent Class Analysis by providing a better breakdown of the potential class groups that we can see to be forming above possibly.
+
+#### Model Analysis
+Now for our model analysis, we perform LCA due to being best to work with discrete categorical data on multiple groups by unique response propensities. We run through 4 LCA models fitting from 3 to 6 latent classes based on income level, age group, gender, and customer rating on SFO on a whole. In addition, since we are determined whether the characteristics has a influence on not just each level of the customer ratings but whether they are satisfied or not, another set of 4 models were run in terms of the binary classifier made earlier.
+```{r, warning=FALSE, message=FALSE, echo=FALSE, results='hide', fig.show='hide'}
+# Creates LCA formula
+lca_formula_dfa1 = cbind(IncomeLevel_num, AgeGroup_num, Gender_num, Rating_num) ~ 1
+lca_formula_binary_dfa1 = cbind(IncomeLevel_num, AgeGroup_num, Gender_num, BinaryRating) ~ 1
+```
+```{r, warning=FALSE, message=FALSE, echo=FALSE, results='hide', fig.show='hide'}
+# Performs LCA analysis
+  #(for each customer rating)
+lca_classes3_dfa1 = poLCA(lca_formula_dfa1, dfa1, nclass = 3, maxiter = 5000)
+lca_classes4_dfa1 = poLCA(lca_formula_dfa1, dfa1, nclass = 4, maxiter = 5000)
+lca_classes5_dfa1 = poLCA(lca_formula_dfa1, dfa1, nclass = 5, maxiter = 5000)
+lca_classes6_dfa1 = poLCA(lca_formula_dfa1, dfa1, nclass = 6, maxiter = 5000)
+
+  #(for binary classifier)
+lca_classes3_binary_dfa1  = poLCA(lca_formula_binary_dfa1, dfa1, nclass = 3, maxiter = 5000)
+lca_classes4_binary_dfa1  = poLCA(lca_formula_binary_dfa1, dfa1, nclass = 4, maxiter = 5000)
+lca_classes5_binary_dfa1  = poLCA(lca_formula_binary_dfa1, dfa1, nclass = 5, maxiter = 5000)
+lca_classes6_binary_dfa1  = poLCA(lca_formula_binary_dfa1, dfa1, nclass = 6, maxiter = 5000)
+```
+
+Since there are no tools to automatically diagnosis the best number of classes, we perform many to conduct class selection, where we compare among model performance using their Akaike Information Criterion (AIC) values.
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+# Reports each lca model AIC values 
+  #(for each customer rating)
+rbind(class3_dfa1 = lca_classes3_dfa1$aic, 
+      class4_dfa1 = lca_classes4_dfa1$aic, 
+      class5_dfa1 = lca_classes5_dfa1$aic,
+      class6_dfa1 = lca_classes6_dfa1$aic
+      )
+  #(for binary classifier)
+rbind(class3_binary_dfa1 = lca_classes3_binary_dfa1$aic, 
+      class4_binary_dfa1 = lca_classes4_binary_dfa1$aic, 
+      class5_binary_dfa1 = lca_classes5_binary_dfa1$aic,
+      class6_binary_dfa1 = lca_classes6_binary_dfa1$aic
+      )
+```
+As a result, we found that the LCA model with 5 and 4 latent classes performed the best among the 4 models for customer ratings and its binary classifier, respectfully. Thus, we then view the model's performance along with examining its probabilities to interpret each defined class among the two models.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+lca_classes5_dfa1 
+plot(lca_classes5_dfa1)
+```
+
+As a result, all of the classes lead towards customers that are highly satisfied regardless of their grouping, which we had presumed based on our EDA.
+Class 1 mostly represents customers, whom are `male`, `45-54`, and make `$50,000-$100,000` that rates `Above-Average`. 
+Class 2 mostly represents customers, whom are `male`, `25-34`, and make `$50,000-$100,000` that rates `Above-Average` with some `Average`. Class 3 mostly represents customers, whom are completely `male`, `25-34`, and make `Under $50,000` that rates `Outstanding`.
+Class 4 mostly represents customers, whom are `female`, 6`25-34`, and make `$50,000 - $100,000` that rates seem to roughly split between `Above-Average` and `Outstanding` with some `Average`.
+Class 5 mostly represents customers, whom are `female`, `18-25`, and almost all make `Under $50,000` that rates `Above-Average` with some `Average`. In addition, we notice that Class 1 is the heaviest population class of almost representing 50% of the total data with Class 2 being half the size of it.
+
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+lca_classes4_binary_dfa1 
+plot(lca_classes4_binary_dfa1)
+```
+As a result, all of the classes lead towards being satisfied regardless of their grouping, which we had presumed based on our previous LCA model. Class 1 mostly represents customers, whom are `male`, `45-54`, and make `Over $150,000` that rates `satisfied`. Class 2 mostly represents customers, whom are `male`, `25-34`, and make `$50,000 - $100,000` that rates `satisfied`. Class 3 mostly represents customers, whom are `female`, `55-64`, and make `$50,000 - $100,000` that rates `satisfied`. Class 4 mostly represents customers, whom are `female`, `18-24`, and make `Under $150,000` that rates `satisfied`. 
+
+Although all classes were only of customers whom were classified as satisfied, we noticed in the probabilities that the increase of dissatisfied customers were among males more so than females and were among incomes around lower incomes like `$50,000-$100,000` among age groups that are 25-34 or 45-54. In addition, here the classes seem to be more evenly proportionate from a range of 0.17 to 0.3 with Class 2 being the larged populated group. However, despite the slight decrease in satisfactory among customers of these types there is no evidence showing there's influence among customers demographic characteristics. In comparison to the previous LCA model, 
+
+
+### A.2.
+For `A.2.`, the executives also want to know if customer satisfaction can be broken down into different attributes of the airport. Knowing this will help the team target specific strengths or areas of improvement. The central feature the customer satisfaction survey is a 14-question portion of the survey asking customers to rate satisfaction with different aspects of the airport represented by Question 6. In addition, the executives wanted us to perform a quantitative analysis to determine if there are broad themes that emerge from this part of the survey.
+
+#### Data Pre-Processing & EDA
+Initially, we decided to take a quick look at the average score per airport attribute. Each letter in following `Q6` correlates to an attribute of the airport. For example, `A` is artwork and exhibitions, `B` is restaurants, and so on. To start let's take a look at the highest scoring attributes on average below:
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+# Rename Variables
+colnames(dfa2) <- c('ArtworkExhibitions', 'Restaurants', 'RetailShops', 'SignsDirections', 'Escalators' ,'InformationScreens', 'InformationBoothsLower', 'InformationBoothsUpper', 'SignsRoadways', 'ParkingFacility', 'AirTrain', 'LongTermParking','Airportrentalcarcenter', 'Overall')
+# Compute variable means
+colMeans(dfa2)
+```
+As a result, it appears that the three highest rated attributes on average are the AirTrain, long term parking and lot shuttle, and the airport rental car center. These are all amenities that score the highest on average according to our respondents ratings. 
+
+
+#### Model Analysis
+We decided to perform Latent Class Analysis to better examine the potential groupings of these amenities and see the correlation between them. We run through 4 LCA models fitting from 3 to 6 latent classes based on several variables reflecting customer response to different aspects of the airport.
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+# Define LCA formula
+f <- cbind(ArtworkExhibitions, Restaurants, RetailShops, SignsDirections, Escalators, InformationScreens, InformationBoothsLower, InformationBoothsUpper, SignsRoadways, ParkingFacility, AirTrain, LongTermParking, Airportrentalcarcenter, Overall) ~ 1
+```
+```{r, warning=FALSE, message=FALSE, echo=FALSE, results='hide', fig.show='hide'}
+# Performs LCA analysis
+lca_classes3_dfa2 <- poLCA(f, dfa2, nclass = 3)
+lca_classes4_dfa2 <- poLCA(f, dfa2, nclass = 4)
+lca_classes5_dfa2 <- poLCA(f, dfa2, nclass = 5)
+lca_classes6_dfa2 <- poLCA(f, dfa2, nclass = 6)
+```
+
+Like before, we used the AIC values to determine the best fitted model.
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+rbind(class3_dfa2 = lca_classes3_dfa2$aic, 
+      class4_dfa2 = lca_classes4_dfa2$aic,
+      class5_dfa2 = lca_classes5_dfa2$aic,
+      class6_dfa2 = lca_classes6_dfa2$aic)
+```
+As a result, the lowest AIC here correlates to having 6 latent classes. We then examine the model's classes by viewing its probabilities and plot to see the type of factors related to each customer type class.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+lca_classes6_dfa2
+plot(lca_classes6_dfa2)
+```
+
+Although this was the optimal number of classes, we decided to reduce the number of classes down to 3 since this was may be too much information to visually digest and comprehend for an end user. 
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+lca_classes3_dfa2
+plot(lca_classes3_dfa2)
+```
+
+As a result for using 3 latent classes, we can see the share of the population listed above the variables and how they would on average score the different airport attributes. Class 3 represents the largest portion of the population and correlates to the greatest average overall score. In this analysis, we can see that class 3 typically ranks the AirTrain, parking facilities, screen monitors both in the upper and lower section of the airport, and the rental car station to correlate to the highest overall score of the airport. Class 1 who typically ranks the airport's overall score the lowest, poorly ranks the artwork, restaurants, retail shops, and does not place as great of an emphasis on the screens and monitors. Class 2 ranks the airport fairly even across the board and does not highlight many features as being better than others. 
+
+In terms of broad themes across this analysis, it appears that the parking facilities, airtrain, long term parking, and more practical features lead to having a heavier weight on the overall score of the SFO airport. In looking for areas to improve, it appears that the restaurants, retail shops, and other smaller amenities could be upgraded as their scores fluctuated especially within the group that represented the most disgruntled visitors. 
+
+
+### A.3.
+3. Free-response comments, either good or bad, were collected in addition to the 14-item quantitative survey. The executives are not quite sure how to examine it without going through individual surveys one by one, but they want you to see if there are any concepts or insights that arise from these responses. Do the free responses relate to the findings in a) or b) at all?
+
+#### Method
+We used sentiment analysis and topic models to determine common concepts in free response questions. This is because sentiment analysis is known as a natural language processing technique that quantifies the feeling behind text. Topic modeling is a machine learning technique which identifies similar content in text. Thus, the topic models were used to gain a further understanding of the comments.
+
+#### Model Analysis 
+Initially, we decided to perform 4 various sentiment analysis on customers free response variable `Q7_text_All`. The following sentiment analysis performed were based on: (i) the airline terminal, (ii) the scheduled flight time to leave, (iii) the airline type, and (iv) whether they are connecting from another flight. In addition, the sentiment for each comment were calculated using the bing lexicon, where insights were gathered from groups in the data.
+
+
+(i) Examines Customer free responses based on their `Airline Terminal`: Note that response indicating 1 and 3 refers to terminals 1 and 3, while 2 refers to the international terminal.
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+# Define sentiment
+sentiment <- dfa3 %>%
+  unnest_tokens(tbl = ., output = word, input = Q7_text_All) %>% 
+  group_by(RESPNUM) %>% 
+  inner_join(get_sentiments("bing")) %>% 
+  count(sentiment) %>% 
+  spread(sentiment, n, fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+
+maxIdxs <- order(sentiment$sentiment, decreasing=TRUE)[1:3]
+minIdxs <- order(sentiment$sentiment, decreasing=FALSE)[1:3]
+
+# Sentiment Analysis based on airline terminal
+termSentiment <- dfa3 %>%
+  unnest_tokens(tbl = ., output = word, input = Q7_text_All) %>% 
+  group_by(TERM) %>% 
+  inner_join(get_sentiments("bing")) %>% 
+  count(sentiment) %>% 
+  spread(sentiment, n, fill = 0) %>% 
+  group_by(TERM) %>% 
+  summarize(sentiment = mean(positive) - mean(negative))
+
+termSentiment
+```
+
+(ii) Examines Customer free responses based on their `Scheduled Flight Time to leave`: Note that responses indicating 1 refers to AM times before 11 AM, 2 refers to MID times from 11 AM to 5 PM, and 3 refers to PM times from after 5 PM.
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+# Sentiment Analysis based on scheduled flight time to leave
+strataSentiment <- dfa3 %>%
+  unnest_tokens(tbl = ., output = word, input = Q7_text_All) %>% 
+  group_by(STRATA) %>% 
+  inner_join(get_sentiments("bing")) %>% 
+  count(sentiment) %>% 
+  spread(sentiment, n, fill = 0) %>% 
+  group_by(STRATA) %>% 
+  summarize(sentiment = mean(positive) - mean(negative))
+
+strataSentiment
+```
+
+(iii)  Examines Customer free responses based on their `Airline Type`: Note that responses indicating 1 refers to major cities, 2 refers to small/ international carriers, and 3 refers to new carriers.
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+# Sentiment Analysis based on airline type
+atypesentiment <- dfa3 %>%
+  unnest_tokens(tbl = ., output = word, input = Q7_text_All) %>% 
+  group_by(ATYPE) %>% 
+  inner_join(get_sentiments("bing")) %>% 
+  count(sentiment) %>% 
+  spread(sentiment, n, fill = 0) %>% 
+  group_by(ATYPE) %>% 
+  summarize(sentiment = mean(positive) - mean(negative))
+
+atypesentiment
+```
+
+(iv)  Examines Customer free responses based on `Whether they are connecting from another flight`: Note that responses indicating 1 refers yes to and 2 refers to no.
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+# Sentiment Analysis based on whether its a connecting flight
+q1Sentiment <- dfa3 %>%
+  unnest_tokens(tbl = ., output = word, input = Q7_text_All) %>% 
+  group_by(Q1) %>% 
+  inner_join(get_sentiments("bing")) %>% 
+  count(sentiment) %>% 
+  spread(sentiment, n, fill = 0) %>% 
+  group_by(Q1) %>% 
+  summarize(sentiment = mean(positive) - mean(negative))
+
+q1Sentiment %>% na.omit()
+```
+
+As a result, when looking at the terminals, individuals flying out of Terminal 1 and Terminal 3 tend to have more negative comments than those flying out of the International Terminal. Respondents with flights scheduled to depart before 11am have slightly more negative comments than those departing later in the day. Respondents flying on a major carrier have tend to have very negative comments and those flying on small or international carriers tend to have slightly negative comments. Only individuals flying on a new carrier tend to have positive comments. Respondents who are not connecting from another flight have significantly more negative comments than those connecting. Lastly, respondents who drove a rental car tend to have very negative comments while all other modes of transportation tend to have neutral comments. These grouped sentiments indicate which areas the airport can improve upon to have a large impact.
+
+Now, we performed topic models to examine the determine the number of optimal theme topics are centered among customer free responses overall. Initially, we determine the optimal number of topics using k to see what's tending among the customer responses
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+txt <- textProcessor(documents = dfa3$Q7_text_All, metadata = dfa3)
+prep <- prepDocuments(documents = txt$documents, vocab = txt$vocab, meta = txt$meta)
+# Identifies optimal K value of topics
+kTest = searchK(documents = prep$documents, vocab = prep$vocab, K = c(3, 4, 5, 10, 15, 20), verbose = FALSE)
+plot(kTest)
+```
+
+When examining k values from 3 to 20, we use the Semantic Coherence and Residual plots to determine the optimal number of k to use in our topic model. As a result, k = 15 demonstrated the best with displaying high semantic coherence and the lowest residuals in comparison to the others overall.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+topic15 <- stm(documents = prep$documents, vocab = prep$vocab, K = 15, verbose = FALSE)
+plot(topic15)
+labelTopics(topic15)
+checkResiduals(topic15, documents = prep$documents)
+```
+Based on the dispersion test statistic, the data doesn't vary as much from the mean data suggesting the data distribution in this model to have to low dispersion, which is good for high precision. However, due to computational simplicity we decided to base all of our interpretations on the examination of 5 topics in our analyses moving forward.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+topic5 <- stm(documents = prep$documents, vocab = prep$vocab, K = 5, verbose = FALSE)
+plot(topic5)
+labelTopics(topic5)
+checkResiduals(topic5, documents = prep$documents)
+```
+As a result, the dispersion test statistic indicates the data may vary too much from the mean data suggesting the data distribution for this model to have to higher dispersion. We are aware this is not desirable and take that into consideration when examining our modeling analyses. As for the five centered topics developed around customers free responses were as follows  (i) topic one pertains to the crowding or overloading within the airport, (ii) topic two references the general areas and amenities, (iii) topic three is about the security screening process and it's issues such as long lines and inefficiency, (iv) topic four contains information on the restaurants, food, and shops and their costs, and (v) topic five is about finding the gates and getting lost. These topics indicate what people are talking about the most. Using this information, airport improvements can be prioritized to address these comments.
+
+
+### Conclusion 
+We concluded that the responses examined in section A.3. to support different claims in section A.1. and A.2., In terms of section A.1., the results based on the sentimental analysis conducted in part A.3. suggested opposing conclusions among customer satisfactory. While section A.1. highlights most customer ratings to be of 4 or 5 (i.e., above-average or outstanding), section A.3. suggests that the majority of customers free responses to have a negative tone in their feedback on SFO. Although it was a shock to see this, it did however make sense on our conclusions of customers demographic characteristics not showing statistical evidence to influencing their satisfactory level. In terms of section A.2., the results based on the topic model analysis conducted in part A.3. did however relate to similar conclusions. Thus suggesting that customers are more or less using the free response section as more of a suggesting box of areas to improve on SFO regardless of rating their overall experience to being more than average. 
+
+
+\newpage
+## Part B - Develop and Investigate Your Own Research Question
+
+### B.1. 
+
+In Part 1 of the project, our team had conducted EDA and EFA evaluations on the dataset.Thus foresting into a set of hypothesis we set out to investigate. Recall that the hypothesis we had proposed were the following:
+
+1. We presume overall that: (i) males fly more frequently than females; (ii) ages from 25 to 54 have the highest flying frequency with a bimodal distribution of 25-34 and 45-54 being the peaks; and (iii) lower income flyers fly locally, higher income flyers fly internationally, and middle-class flyers fly domestically on average.
+
+2. We presume that the frequency of flyers out of SFO is internationally but varies based on other factors like the passenger's socioeconomic status.
+
+3. We presume that the higher the rating for SFO attributes, the higher the frequency of flights flown out of SFO.
+
+4. We presume that the lower the rating for SFO cleanliness, the lower the ratings for SFO attributes.
+
+5. We presume that the lower the safety ratings is at SFO, the lower the frequency of flights flown out of SFO.
+
+
+Further investigations will be detailed discussed in Section B.2.
+
+
+### B.2.
+The SFO executives feel that additional insights can be gained from the customer satisfaction survey dataset. Based on your prior EDA deliverable and the topics we have discussed in class, develop an additional research question and execute a plan to evaluate it with these data using a method we covered this semester. Provide an appropriate explanation of your method of choice and how it applies to your question. If formal hypotheses are tested, clearly explain the results of these tests. If the method is more descriptive or data-driven, define how the results are evaluated, and provide sufficient output and data visuals to communicate the outcome. You don’t need to fish for a “significant” finding here; even null or unexpected results can be useful if the hypothesis is reasonable.
+
+#### Research Question
+Do passengers that fly internationally out of SFO have varying factors such as, the passenger’s socioeconomic status, compared to passengers that fly in state or out of state?
+
+#### Hypothesis
+We presume that the frequency of flyers out of SFO is internationally but varies based on other factors such as the passenger’s socioeconomic status.
+
+#### Plan
+The plan for this analysis is to begin with data pre proccesing to deal with missing values and to structure our data. Then we will do some EDA and explore the data to see if there's any correlations between the variables, the number of flights to destinations, word clouds from reviews/comments, but also to clean up the data to answer our question.Following that we will use random forests and kmeans clustering to answer our research question.
+
+#### Method
+We then will use kmeans clustering on our cleaned data which uses the average in each column to fill the Na's. We chose K-means clustering because we wanted to see if there were any specific characteristics from the survey for people that flew out out of state, in-state, and internationally in order to see if they truly are different types of passengers depending where they are flying. 
+
+#### EDA & Data Pre-processing
+All EDA and Data Pre-processing were performed in Part 1 of the project. Overall, we noticed many survey variables had large amounts of missing values, where some had no records at all. Each of the variables were customer survey responses pertaining to a customer's flight information. We decided to remove variables that had more than 20% of missing data. We examined the variable's descriptive statistics along with their correlations amongst one another. Note that instead of removing NA values, we replaced them with the averages of the current data in the columns. We noticed that Questions 5-8 had shown the strongest presence of correlation. In the majority of cases, we can see a positive correlation present between questions, where the strongest positive correlation between the responses of sub questions were 6 (A through N) and 8 (A through F). In addition, Two points that stood out the most was the correlation between question 1 among question 12 and question 15 with have the highest negative correlation compared to the others. Q1 and Q12 having a -0.41 correlation and Q1 and Q15 having a -0.65 correlation. More specifically, we had also examined customer's feedback using the `Q7_text_all` variable by creating a word cloud. The word cloud contained the most used words said by customers when commenting with the most frequent words appeared larger in size. Thus providing an initial idea of what customers may find important or feel. As a result, it seems the most frequent words used were `better`, `find`, `positive`, `expensive`, and `food`.
+
+
+#### Model Analysis
+First, we will looked at a table that displays the type of airline and the destinations, whether flights would be in state, out of state, or international.
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+# re-organize data.frame layout
+data_tidy <- data %>% dplyr::select(RESPNUM, CCGID, Location.1, MAIL, LANG,
+  INTDATE, STRATA, TERM, GATENUM, DESTMARK, WEIGHT, ATYPE, AIRLINE, DEST, DESTGEO, COUNTRY, SFFLAG, Q1:Q15, Q17, Q18, Q19, 
+  AGE, INC, DESTINATION, Q7_text_All)
+# removal of variables that have over 50% of missing values & 4 meaningless variables
+data_tidy_final <- data_tidy %>% dplyr::select(-c(RESPNUM, CCGID, Location.1, AGE, INC, Q3_5, Q3_6, Q8COM3, Q9ANEG3, Q9ANTR3, Q13_COM, Q13COM3, Q14A, Q2_5, Q2_6, Q3_4, Q2_3, Q2_4, Q3_3, Q7COM3, Q7A1, Q7A2, Q7A3, Q8COM1, Q8COM2, Q9APOS2, Q9APOS3, Q9ANEG1:Q9ANEG2, Q9ANTR1:Q9ANTR2, Q11A1:Q11A3, Q13COM2,Q14A2,  Q14A3, Q7COM2, Q9APOS1, Q11, Q13COM1, Q14A1, Q7COM1))
+# Examines tabulated data for potential group classes
+data_tidy_final %>% group_by(ATYPE) %>% summarise(WithinCalifornia=sum(DEST == 1), OutOfState=sum(DEST == 2), OutOfCountry=sum(DEST == 3)) %>% kable("html", escape = F, caption = "Travel Destinations by Airline Type")
+```
+
+By looking at the type of airline and destinations, we noticed that the majority of flights were on a major airline carrier, traveling out of California, and within the United States. Whereas, new carriers only flew out of the country. We can use clustering to determine if these passengers answered the survey similarly.
+
+We will first start by looking at a variable importance plot from a random forest to determine what variables are most important in terms of the destination.
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+# final dataset used for analysis
+eda <- subset(data_tidy_final, select=-c(MAIL, LANG, DESTINATION, Q7_text_All))
+avg <- na.aggregate(eda)
+fit_rand <- randomForest(factor(DEST)~.,avg)
+varImpPlot(fit_rand)
+```
+
+It's clear that DESTGEO is correlated with the destination since it's an assigned code providing area of the world flight is destined, so this could be an interesting variable for our analysis since it's more specific that the variable we are currently looking at but should be removed. Gate number, Weight, Intdate, Terminal, Airline type, Airline also is correlated and should be removed since it has nothing to do with the passenger and more about the logistics of the airport. Since this is the case I'm going to remove those variables and do another variable importance plot.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+avg_imp <- avg %>% dplyr::select(-c(GATENUM, WEIGHT, INTDATE, TERM, DESTGEO, ATYPE, AIRLINE))
+fit_rand2 <- randomForest(factor(DEST)~.,avg_imp)
+varImpPlot(fit_rand2)
+```
+
+So based of the variable importance plot the variables that seem to matter most when looking at if you're traveling in-state, out of state, or international are what country you are from, the market size of the destination airport, the time of day the flight is scheduled to leave, and whether or not you have residence in the Bay Area. These all make sense as to why these variables are important. The six questions that were most important were what country you departed from, if you checked baggage, your age, if you live in the bay area, how they rate the cleanliness of boarding areas, and how they got to the airport. These all make sense but the most interesting ones are the age, if you checked baggage, and the rating of cleanliness. These could be telling signs that there are certain characteristics and backgrounds that matter when determining if a passenger is flying in state, out of state, or international. We are now going to do a kmeans clustering analysis to determine if these thoughts are correct, and see if there are clear groups of passengers. 
+
+The first thing we are going to do is to see if the gap statistic method recommends a certain number of clusters is visible from the top 23 most important variables from the plot above. 23 was chosen since there seemed to be a drop in mean decrease gini after the 23rd variable (Q6F).
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+clust_vars <- avg_imp %>% dplyr::select(COUNTRY, DESTMARK, STRATA, SFFLAG, Q12, Q4A, Q17, Q15, Q8A, Q3_1, Q6E, Q2_1, Q19, Q13B, Q6A, Q8F, Q6C, Q13A, Q6B, Q5AVG, Q5, Q8E, Q6F, DEST)
+# Performs cluster analysis 
+clust_vars %>% 
+  scale() %>% 
+  fviz_nbclust(x = ., FUNcluster = kmeans, method = "gap")
+```
+
+It seems the gap statistic method suggests using 10 clusters. Lets looks at the elbow method as well.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+clust_vars %>% 
+  scale() %>% 
+  fviz_nbclust(x = ., FUNcluster = kmeans, method = "wss")
+```
+
+It seems like the elbow is at 2 which means that this method suggest using 2 clusters. Lets take a look at the last method we will be using which is the silhouette method.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+clust_vars %>% 
+  scale() %>% 
+  fviz_nbclust(x = ., FUNcluster = kmeans, method = "silhouette")
+```
+
+The silhouette method also suggests using 2 clusters. Since this is the case we will look at three clusters in order to see if they are in fact grouped by the out of state, in state, and international destinations.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+clust_vars_scaled <- clust_vars %>% scale()
+kmeans <- kmeans(x = clust_vars_scaled, centers = 3)
+fviz_cluster(kmeans, clust_vars_scaled)
+```
+
+Unfortunately when looking at this graphic above you can tell that some points look like the could be in both or all three of the clusters which is not ideal. This means that there doesn't seem to be any grouping of passengers it seems which goes against our hypothesis. However let's still take a look at the means of these clusters.
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+kmeans$centers
+```
+
+By looking at the DEST variable it seems that most people traveling in state are in cluster 3 (Dest = 1 and is lowest mean), most people traveling out of state are in cluster 2 (Dest = 2 and is second highest mean), and most people traveling internationally are in cluster 1 (Dest = 3 and is highest mean). Judging by this we can make, not very valid, but some assumptions about each type of passenger. For example, Q19 is about household income, and it seems people with the highest household income are in cluster 3 which is the same cluster as people who travel more instate. This can make sense since people with higher incomes are more likely to travel by plane in state since it's quicker, rather than perhaps spending less money by taking a car. Then another interesting variable to look at is age where it seems to be the youngest people are in cluster 2 which means people of younger age tend to travel more out of state, while the oldest people are in cluster 3 which are more in state travelers.
+
+
+### Conclusion
+
+In all though, there didn't seem to be any clear groupings of these passengers. Since this is the case, we fail to answer our hypothesis that passengers have similar characteristics based on whether you are flying in state, out of state, or internationally. The takeaway from this is that although there wasn't any patterns from the passengers about their destination there still could be more ways to group passengers in order to target groups with specific needs or accommodations.
+
+
+\newpage
+## Appendices 
+
+## Appendix A
+### Code for EDA
+```{r, warning=FALSE, message=FALSE, results='hide', fig.show='hide', eval=FALSE}
+# load libraries
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(zoo)
+library(tidyr)
+library(knitr)
+library(poLCA) 
+library(tidytext)
+library(sentimentr)
+library(stm)
+library(tm) 
+library(psych) 
+library(wordcloud)
+library(corrplot) 
+library(factoextra)
+library(randomForest)
+
+# Load data
+data = read.table("SFO_survey_withText.txt", header = TRUE, sep = "", dec = ".")
+# Computes and filters the percentage of missing data from each variable
+colSums(is.na(data[colSums(is.na(data)/dim(data)[1]) > 0.3])/dim(data)[1]*100) 
+colSums(is.na(data[colSums(is.na(data)/dim(data)[1]) <= 0.3])/dim(data)[1]*100) 
+```
+
+### Code for Data Preprocessing
+```{r, warning=FALSE, message=FALSE, results='hide', fig.show='hide', eval=FALSE}
+# Final data.frame for Part A section
+data_tidy <- data[colSums(is.na(data)/dim(data)[1]) <= 0.3] #%>% na.omit()
+# Data.frame for A.1.
+dfa1 <- round(data_tidy %>% dplyr::select(c(Q6N, Q17, Q18, Q19)) %>% na.aggregate(),0)
+# Data.frame for A.2.
+dfa2 <- round(data_tidy %>% dplyr::select(c(Q6A:Q6N)) %>% na.aggregate(),0)
+# Data.frame for A.3.
+dfa3 <- data
+```
+
+\newpage
+## Appendix B
+### Code for A.1.
+```{r, warning=FALSE, message=FALSE, results='hide', fig.show='hide', eval=FALSE}
+## Data Pre-Processing
+# Response filterization
+dfa1 <- dfa1 %>% filter(Q6N != 0, Q17 !=0, Q18 !=0, 19 !=0, 
+                        Q6N != 6, Q17 != 8, Q19 !=5) 
+# Create factor variables for each variable:
+  # customer ratings
+dfa1$Q6N_factor <- factor(as.factor(dfa1$Q6N), levels = c(1,2,3,4,5), 
+                          labels = c("Unacceptable","Below-Average","Average",
+                                     "Above-Average","Outstanding"))
+  # age group
+dfa1$Q17_factor <- factor(as.factor(dfa1$Q17), levels = c(1,2,3,4,5,6,7), 
+                          labels = c("< 18","18-24","25-34","35-44",
+                                     "45-54","55-64","65 =<"))
+  # gender
+dfa1$Q18_factor <- factor(as.factor(dfa1$Q18), levels = c(1,2), 
+                          labels = c("Male","Female"))
+  # income level
+dfa1$Q19_factor <- factor(as.factor(dfa1$Q19), levels = c(1,2,3,4), 
+                          labels = c("< 50k", "50k-100k", "100k-150k","150k <"))
+# Create customer rating type variable
+dfa1$binary_rating <- dfa1$Q6N_factor
+levels(dfa1$binary_rating) <- c("Dissatisfied","Dissatisfied",
+                                "Dissatisfied","Satisfied","Satisfied")
+
+##EDA
+## univariate analysis
+# Distribution of customer's rating 
+ggplot(dfa1, aes(x=Q6N_factor)) + geom_bar() + 
+  geom_text(stat='count', aes(label=..count..), vjust = -1)  + 
+  xlab( "Ratings for SFO as a whole") + 
+  ggtitle("Distribution of Customer Ratings on SFO on a whole") + 
+  ylim(0,2000)
+# Distribution of age
+ggplot(dfa1, aes(x=Q17_factor)) + geom_bar() + 
+  geom_text(stat='count', aes(label=..count..), vjust = -1)  + 
+  xlab("Range of Age Group (in years)")  + 
+  ggtitle("Distribution of Customer's Age Group") + 
+  ylim(0,800)
+# Distribution of gender
+ggplot(dfa1, aes(x=Q18_factor)) + geom_bar() + 
+  geom_text(stat='count', aes(label=..count..), vjust = -1) + 
+  xlab("Gender")  + ggtitle("Distribution of Customer's Gender") + 
+  ylim(0,2000)
+# Distribution of household income level
+ggplot(dfa1, aes(x=Q19_factor)) + geom_bar() + 
+  geom_text(stat='count', aes(label=..count..), vjust = -1) + 
+  xlab("Range in Household Income (in US Dollars)")  + 
+  ggtitle("Distribution of Customer's Household Income") + 
+  ylim(0,1750)
+# Distribution of customer's binary rating
+ggplot(dfa1, aes(x=binary_rating)) + geom_bar() + 
+  geom_text(stat='count', aes(label=..count..), vjust = -1)  + 
+  xlab("Customer Type")  + ggtitle("Distribution of Customer's Rating Classification") + 
+  ylim(0,2750)
+
+## bivariate analysis
+# Distribution of age
+ggplot(dfa1, aes(x=Q17_factor, fill = binary_rating)) + 
+  geom_bar() + geom_text(stat='count', aes(label=..count..), vjust = -1)  + 
+  xlab("Range of Age Group (in years)")  + 
+  ggtitle("Distribution of Customer's Age Group") + 
+  ylim(0,800)
+# Distribution of gender
+ggplot(dfa1, aes(x=Q18_factor, fill = binary_rating)) + 
+  geom_bar() + geom_text(stat='count', aes(label=..count..), vjust = -1) + 
+  xlab("Gender")  + ggtitle("Distribution of Customer's Gender") + 
+  ylim(0,2000)
+# Distribution of household income level
+ggplot(dfa1, aes(x=Q19_factor, fill = binary_rating)) + geom_bar() + 
+  geom_text(stat='count', aes(label=..count..), vjust = -1) + 
+  xlab("Range in Household Income (in US Dollars)")  + 
+  ggtitle("Distribution of Customer's Household Income") + 
+  ylim(0,1750)
+
+# Rename colnames 
+# Note that Q6N = customer_rating, Q18 = gender, Q17 = age group, Q19 = income level
+colnames(dfa1) <- c('Rating_num','AgeGroup_num','Gender_num','IncomeLevel_num',
+                    'Rating_fa','AgeGroup_fa','Gender_fa','IncomeLevel_fa', 'BinaryRating')
+
+## Multivariate analysis
+dfa1 %>% group_by(BinaryRating, Gender_fa, AgeGroup_fa, IncomeLevel_fa) %>% summarise(n=n())
+
+
+## Model Analysis - LDA
+# Creates LCA formula
+lca_formula_dfa1 = cbind(IncomeLevel_num, AgeGroup_num, Gender_num, Rating_num) ~ 1
+lca_formula_binary_dfa1 = cbind(IncomeLevel_num, AgeGroup_num, Gender_num, BinaryRating) ~ 1
+
+# Performs LCA analysis
+  #(for each customer rating)
+lca_classes3_dfa1 = poLCA(lca_formula_dfa1, dfa1, nclass = 3, maxiter = 5000)
+lca_classes4_dfa1 = poLCA(lca_formula_dfa1, dfa1, nclass = 4, maxiter = 5000)
+lca_classes5_dfa1 = poLCA(lca_formula_dfa1, dfa1, nclass = 5, maxiter = 5000)
+lca_classes6_dfa1 = poLCA(lca_formula_dfa1, dfa1, nclass = 6, maxiter = 5000)
+  #(for binary classifier)
+lca_classes3_binary_dfa1  = poLCA(lca_formula_binary_dfa1, dfa1, nclass = 3, maxiter = 5000)
+lca_classes4_binary_dfa1  = poLCA(lca_formula_binary_dfa1, dfa1, nclass = 4, maxiter = 5000)
+lca_classes5_binary_dfa1  = poLCA(lca_formula_binary_dfa1, dfa1, nclass = 5, maxiter = 5000)
+lca_classes6_binary_dfa1  = poLCA(lca_formula_binary_dfa1, dfa1, nclass = 6, maxiter = 5000)
+
+# Reports each lca model AIC values 
+  #(for each customer rating)
+rbind(class3_dfa1 = lca_classes3_dfa1$aic, 
+      class4_dfa1 = lca_classes4_dfa1$aic, 
+      class5_dfa1 = lca_classes5_dfa1$aic,
+      class6_dfa1 = lca_classes6_dfa1$aic
+      )
+  #(for binary classifier)
+rbind(class3_binary_dfa1 = lca_classes3_binary_dfa1$aic, 
+      class4_binary_dfa1 = lca_classes4_binary_dfa1$aic, 
+      class5_binary_dfa1 = lca_classes5_binary_dfa1$aic,
+      class6_binary_dfa1 = lca_classes6_binary_dfa1$aic
+      )
+
+# Reports lca model for class 4:
+  # using each customer rating 
+lca_classes5_dfa1 
+plot(lca_classes5_dfa1)
+  # using binary classifier rating 
+lca_classes4_binary_dfa1 
+plot(lca_classes4_binary_dfa1)
+```
+
+### Code for A.2.
+```{r, warning=FALSE, message=FALSE, results='hide', fig.show='hide', eval=FALSE}
+## Data Pre-Processing & EDA
+# Rename Variables
+colnames(dfa2) <- c('ArtworkExhibitions', 'Restaurants', 'RetailShops', 'SignsDirections', 'Escalators' ,'InformationScreens', 'InformationBoothsLower', 'InformationBoothsUpper', 'SignsRoadways', 'ParkingFacility', 'AirTrain', 'LongTermParking','Airportrentalcarcenter', 'Overall')
+# Compute variable means
+colMeans(dfa2)
+
+## Model Analysis - LDA
+# Creates LCA formula
+f <- cbind(ArtworkExhibitions, Restaurants, RetailShops, SignsDirections, Escalators, InformationScreens, InformationBoothsLower, InformationBoothsUpper, SignsRoadways, ParkingFacility, AirTrain, LongTermParking, Airportrentalcarcenter, Overall) ~ 1
+# Performs LCA analysis
+lca_classes3_dfa2 <- poLCA(f, dfa2, nclass = 3)
+lca_classes4_dfa2 <- poLCA(f, dfa2, nclass = 4)
+lca_classes5_dfa2 <- poLCA(f, dfa2, nclass = 5)
+lca_classes6_dfa2 <- poLCA(f, dfa2, nclass = 6)
+# Reports each lca model AIC values
+rbind(class3_dfa2 = lca_classes3_dfa2$aic, 
+      class4_dfa2 = lca_classes4_dfa2$aic,
+      class5_dfa2 = lca_classes5_dfa2$aic,
+      class6_dfa2 = lca_classes6_dfa2$aic)
+# Reports lca model for class 6
+lca_classes6_dfa2
+plot(lca_classes6_dfa2)
+# Reports lca model for class 3
+lca_classes3_dfa2
+plot(lca_classes3_dfa2)
+```
+
+### Code for A.3.
+```{r, warning=FALSE, message=FALSE, results='hide', fig.show='hide', eval=FALSE}
+## Model Analysis - Sentiment & Topic Model Analysis
+
+# Define sentiment
+sentiment <- dfa3 %>%
+  unnest_tokens(tbl = ., output = word, input = Q7_text_All) %>% 
+  group_by(RESPNUM) %>% 
+  inner_join(get_sentiments("bing")) %>% 
+  count(sentiment) %>% 
+  spread(sentiment, n, fill = 0) %>% 
+  mutate(sentiment = positive - negative)
+maxIdxs <- order(sentiment$sentiment, decreasing=TRUE)[1:3]
+minIdxs <- order(sentiment$sentiment, decreasing=FALSE)[1:3]
+# Sentiment Analysis based on airline terminal
+termSentiment <- dfa3 %>%
+  unnest_tokens(tbl = ., output = word, input = Q7_text_All) %>% 
+  group_by(TERM) %>% 
+  inner_join(get_sentiments("bing")) %>% 
+  count(sentiment) %>% 
+  spread(sentiment, n, fill = 0) %>% 
+  group_by(TERM) %>% 
+  summarize(sentiment = mean(positive) - mean(negative))
+termSentiment
+# Sentiment Analysis based on scheduled flight time to leave
+strataSentiment <- dfa3 %>%
+  unnest_tokens(tbl = ., output = word, input = Q7_text_All) %>% 
+  group_by(STRATA) %>% 
+  inner_join(get_sentiments("bing")) %>% 
+  count(sentiment) %>% 
+  spread(sentiment, n, fill = 0) %>% 
+  group_by(STRATA) %>% 
+  summarize(sentiment = mean(positive) - mean(negative))
+strataSentiment
+# Sentiment Analysis based on airline type
+atypesentiment <- dfa3 %>%
+  unnest_tokens(tbl = ., output = word, input = Q7_text_All) %>% 
+  group_by(ATYPE) %>% 
+  inner_join(get_sentiments("bing")) %>% 
+  count(sentiment) %>% 
+  spread(sentiment, n, fill = 0) %>% 
+  group_by(ATYPE) %>% 
+  summarize(sentiment = mean(positive) - mean(negative))
+atypesentiment
+# Sentiment Analysis based on whether its a connecting flight
+q1Sentiment <- dfa3 %>%
+  unnest_tokens(tbl = ., output = word, input = Q7_text_All) %>% 
+  group_by(Q1) %>% 
+  inner_join(get_sentiments("bing")) %>% 
+  count(sentiment) %>% 
+  spread(sentiment, n, fill = 0) %>% 
+  group_by(Q1) %>% 
+  summarize(sentiment = mean(positive) - mean(negative))
+q1Sentiment %>% na.omit()
+
+# Performs Topic Model Analysis
+txt <- textProcessor(documents = dfa3$Q7_text_All, metadata = dfa3)
+prep <- prepDocuments(documents = txt$documents, vocab = txt$vocab, meta = txt$meta)
+# Identifies optimal K value of topics
+kTest = searchK(documents = prep$documents, vocab = prep$vocab, 
+                K = c(3, 4, 5, 10, 15, 20), verbose = FALSE)
+plot(kTest)
+# Computes Model 
+topic15 <- stm(documents = prep$documents, vocab = prep$vocab, K = 15, verbose = FALSE)
+# Plots theme topic most used words 
+plot(topic15)
+# Highlights theme topic most used words
+labelTopics(topic15)
+# Reports dispersion statistic
+checkResiduals(topic15, documents = prep$documents)
+# Computes Model 
+topic5 <- stm(documents = prep$documents, vocab = prep$vocab, K = 5, verbose = FALSE)
+# Plots theme topic most used words 
+plot(topic5)
+# Highlights theme topic most used words
+labelTopics(topic5)
+# Reports dispersion statistic
+checkResiduals(topic5, documents = prep$documents)
+```
+
+\newpage
+## Appendix C
+### Code for Part B.1.
+```{r, warning=FALSE, message=FALSE, results='hide', fig.show='hide', eval=FALSE}
+# load libraries
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(tm)
+library(wordcloud)
+library(tidyr)
+library(corrplot)
+library(psych)
+library(knitr)
+library(factoextra)
+
+
+## Get Data
+# load data
+data = read.table("SFO_survey_withText.txt", header = TRUE, sep = "", dec = ".")
+# provides a glimpse of the data
+glimpse(data)
+
+## Data Pre-processing
+# examines location of missing values
+colSums(is.na(data))
+# re-organize data.frame layout
+data_tidy <- data %>% dplyr::select(RESPNUM, CCGID, Location.1, MAIL, LANG,
+  INTDATE, STRATA, TERM, GATENUM, DESTMARK, WEIGHT, ATYPE, AIRLINE, DEST, DESTGEO, COUNTRY, SFFLAG, Q1:Q15, Q17, Q18, Q19, 
+  AGE, INC, DESTINATION, Q7_text_All)
+# removal of variables that have over 50% of missing values & 4 meaningless variables
+data_tidy_final <- data_tidy %>% dplyr::select(-c(RESPNUM, CCGID, Location.1, AGE, INC, Q3_5, Q3_6, Q8COM3, Q9ANEG3, Q9ANTR3, Q13_COM, Q13COM3, Q14A, Q2_5, Q2_6, Q3_4, Q2_3, Q2_4, Q3_3, Q7COM3, Q7A1, Q7A2, Q7A3, Q8COM1, Q8COM2, Q9APOS2, Q9APOS3, Q9ANEG1:Q9ANEG2, Q9ANTR1:Q9ANTR2, Q11A1:Q11A3, Q13COM2,Q14A2,  Q14A3, Q7COM2, Q9APOS1, Q11, Q13COM1, Q14A1, Q7COM1))
+dim(data_tidy_final)
+# percentage of data removed
+max(colSums(is.na(data_tidy_final)))/dim(data_tidy_final)[1]*100
+
+## EDA
+# unique(data$DESTINATION)
+sort(table(data_tidy_final$DESTINATION))
+barplot(sort(table(data_tidy_final$DESTINATION)))
+# Creates worldcloud
+cloud.df <- Corpus(DataframeSource(data.frame(doc_id = 1, text = data_tidy_final[, "Q7_text_All"])))
+cloud.df <- tm_map(cloud.df, removePunctuation)
+cloud.df <- tm_map(cloud.df, content_transformer(tolower))
+cloud.df <- tm_map(cloud.df, function(x) removeWords(x, stopwords("english")))
+tdm <- TermDocumentMatrix(cloud.df)
+m <- as.matrix(tdm)
+v <- sort(rowSums(m), decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v)
+wordcloud(d$word,d$freq, scale=c(8,.3),min.freq=2,max.words=100, random.order=T, rot.per=.15, vfont=c("sans serif","plain"))
+# Reports Descriptive Statistics of the data
+Hmisc::describe(data_tidy_final)
+
+# final dataset used for analysis
+eda <- subset(data_tidy_final, select=-c(MAIL, LANG, DESTINATION, Q7_text_All))
+avg <- na.aggregate(eda)
+
+## Correlation Analysis
+# examines entire dataset
+corrplot(cor(avg))
+# examines subset of datset
+corrplot(cor(avg[1:12]))
+corrplot(cor(avg[13:54]))
+# reports the highest correlated variables
+sub1 <- cor(avg[25:44])
+round(sub1, 2)
+round(cor(avg[13], avg[47]),2)
+round(cor(avg[13], avg[51]),2)
+
+## EFA
+# Validates the performance for conducting an EFA
+cortest.bartlett(avg)
+KMO(avg)
+# Identifies the appropriate number of PC and factors
+scree(avg)
+fa.parallel(avg)
+# no rotation
+fa1 <- fa(avg, nfactors = 20, rotate = "none", covar = FALSE)
+print(fa1$loadings, cutoff = 0.001, digits = 3)
+fa1$Phi
+# orthogonal rotation
+fa2 <- fa(avg, nfactors = 20, rotate = "varimax", covar = FALSE)
+print(fa2$loadings, cutoff = 0.001, digits = 3)
+fa2$Phi
+# oblique rotation
+fa3 <- fa(avg, nfactors = 20, rotate = "Promax")
+print(fa3$loadings, cutoff = 0.001, digits = 3)
+fa3$Phi #look at correlation between latent factors
+
+## Explore (some) Hypothesis
+# Examines tabulated data for potential group classes
+data_tidy_final %>%
+  group_by(ATYPE) %>%
+  summarise(WithinCalifornia=sum(DEST == 1), OutOfState=sum(DEST == 2), OutOfCountry=sum(DEST == 3)) %>% 
+  kable("html", escape = F, caption = "Travel Destinations by Airline Type", table.attr = "style='width:80%;'" )
+
+# Performs cluster analysis 
+avg %>% 
+  scale() %>% 
+  fviz_nbclust(x = ., FUNcluster = kmeans, method = "gap")
+avg %>% 
+  scale() %>% 
+  fviz_nbclust(x = ., FUNcluster = clara, method = "gap")
+```
+
+### Code for Part B.2.
+```{r, warning=FALSE, message=FALSE, results='hide', fig.show='hide', eval=FALSE}
+#fitting random forest and making importance plots
+fit_rand <- randomForest(factor(DEST)~.,avg)
+varImpPlot(fit_rand)
+
+avg_imp <- avg %>% dplyr::select(-c(GATENUM, WEIGHT, INTDATE, TERM, DESTGEO, ATYPE, AIRLINE))
+fit_rand2 <- randomForest(factor(DEST)~.,avg_imp)
+varImpPlot(fit_rand2)
+
+#cleaning data for cluster analysis
+clust_vars <- avg_imp %>% dplyr::select(COUNTRY, DESTMARK, STRATA, SFFLAG, Q12, Q4A, Q17, Q15, Q8A, Q3_1, Q6E, Q2_1, Q19, Q13B, Q6A, Q8F, Q6C, Q13A, Q6B, Q5AVG, Q5, Q8E, Q6F, DEST)
+
+# Performs gap stat method
+clust_vars %>% 
+  scale() %>% 
+  fviz_nbclust(x = ., FUNcluster = kmeans, method = "gap")
+
+#Performs elbow method
+clust_vars %>% 
+  scale() %>% 
+  fviz_nbclust(x = ., FUNcluster = kmeans, method = "wss")
+
+#Performs silhouette method
+clust_vars %>% 
+  scale() %>% 
+  fviz_nbclust(x = ., FUNcluster = kmeans, method = "silhouette")
+
+#running k-means cluster model
+clust_vars_scaled <- clust_vars %>% scale()
+kmeans <- kmeans(x = clust_vars_scaled, centers = 3)
+fviz_cluster(kmeans, clust_vars_scaled)
+
+#looking at centers of kmeans
+kmeans$centers
+```
