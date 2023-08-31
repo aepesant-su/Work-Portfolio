@@ -1,0 +1,391 @@
+---
+title: "Machine Learning Analysis on Cancer Data"
+author: "Pesantez, Alejandro"
+date: "Sun, 3/27/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+```{r,echo=FALSE,message=FALSE,warning=FALSE}
+# Set so that long lines in R will be wrapped:
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=80), tidy=TRUE)
+```
+# Objective
+
+In this project, we'll be analyzing a set of data using three machine learning methods.
+
+Load libraries:
+```{r, message=FALSE,warning=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(rpart)
+library(partykit)
+library(randomForest)
+library(class)
+library(caret)
+library(ROCR)
+library(GGally)
+```
+
+
+# The Data
+
+The physicians have identified a data set that consists of over 500 measurements from Fine Needle Aspiration (FNA) of breast tissue masses. In an FNA, a small needle is used to extract a sample of cells from a tissue mass. The cells are then photographed under a microscope. The resulting photographs are entered into graphical imaging software. A trained technician uses a mouse pointer to draw the boundary of the nuclei. The software then calculated each of ten characteristics for the nuclei. 
+
+The data consists of measurements of the cell nuclei for the following characteristics:
+
+1. radius, 
+2. texture,
+3. perimeter,
+4. area,
+5. smoothness (local variation in radius lengths),
+6. compactness (perimeter^2/ area - 1.0),
+7. concavity (severity of concave portions of the contour),
+8. concave points (number of concave portions of the counter),
+9. symmetry, and 
+10. fractal dimension ("coastline approximation" -1).
+
+Measurements of these ten characteristics are summarized for all cells in the sample. The data set consists of the mean, standard error of the mean, and maximum of the 10 characteristics, for a total of 30 observations for each. Additionally, the data includes an identification number and a variable that indicates if the tissue mass is malignant (M) or benign (B).
+
+Load data
+```{r}
+fna <- read.csv("FNA_cancer.csv")
+glimpse(fna)
+```
+
+
+# The Task
+
+We've been asked by the physicians to conduct an analysis of the data using three of the classification methods we've seen in this class, and provide a video presentation that describes those results.
+
+For our analysis we'll be:
+
+- performing basic exploratory data analysis,
+- splitting the data into test and training data,
+- build a classification algorithm using decision trees (prune your tree appropriately),
+- build a classification algorithm using random forest/ bagging (adjust the parameters of the forest appropriately), and 
+- build a classification algorithm using Kth Nearest Neighbors (tune the value of K appropriately).
+
+
+## EDA
+
+Convert variable(s) to approprate variable types
+```{r}
+fna_tidy <- fna %>% mutate( id = as.character(id), diagnosis = as.factor(diagnosis) )
+# Checks each variables data type
+sapply(fna_tidy, "class")
+```
+
+Descriptive Statistic for each variable
+```{r}
+summary(fna_tidy)
+```
+
+Counts total number of NAs in each variable in the data set
+```{r}
+na_count <-sapply(fna_tidy, function(y) sum(length(which(is.na(y)))))
+data.frame(na_count)
+```
+
+Add binary variable for response
+```{r}
+fna_tidy$diagnosis_binary <- as.factor(ifelse(fna_tidy$diagnosis == "M", 1, 0))
+```
+
+Select desirable variables 
+```{r}
+fna_tidy <- fna_tidy %>% dplyr::select(id, diagnosis, diagnosis_binary, radius_mean,
+                                       texture_mean, perimeter_mean, area_mean,
+                                       smoothness_mean, compactness_mean, concavity_mean,
+                                       concave.points_mean, symmetry_mean, 
+                                       fractal_dimension_mean)
+
+dim(fna_tidy)
+```
+
+Correlation between variables
+```{r}
+round(cor(fna_tidy[4:13]), 4)
+```
+
+Checking for outliers
+```{r}
+# creating boxplots to check for outliers on all variables 
+boxplot(fna_tidy[4:13], names = c("radius","texture","perimeter","area",
+                                  "smoothness", "compactness", "concavity",
+                                  "concave points", "symmetry",
+                                  "Fractal dimension"))
+
+# examines the outliers on all variables by an individual basis
+boxplot(fna_tidy[4:5], names = c("radius","texture"))
+boxplot(fna_tidy[6], names = c("perimeter"))
+boxplot(fna_tidy[7], names = c("area"))
+boxplot(fna_tidy[8:13], names = c("smoothness", "compactness", "concavity",
+                                  "concave points", "symmetry",
+                                  "Fractal dimension"))
+```
+
+Variable importance plot
+```{r}
+regressor <- randomForest(as.factor(diagnosis_binary) ~ . , fna_tidy[3:13], importance=TRUE)
+varImpPlot(regressor)
+```
+
+
+Re-scaling appropriate variables between 0 and 1 scale
+```{r}
+# Function that re-scales the data
+rescale_x <- function(x){(x-min(x))/(max(x)-min(x))}
+
+# Creates new data.frame containing re-scaled variables
+fna_tidy_rescale <- fna_tidy
+
+# Re-scales the necessarily variables from the data set
+fna_tidy_rescale$radius_mean <- rescale_x(fna_tidy_rescale$radius_mean)
+fna_tidy_rescale$texture_mean <- rescale_x(fna_tidy_rescale$texture_mean)
+fna_tidy_rescale$perimeter_mean <- rescale_x(fna_tidy_rescale$perimeter_mean)
+fna_tidy_rescale$area_mean <- rescale_x(fna_tidy_rescale$area_mean)
+fna_tidy_rescale$smoothness_mean <- rescale_x(fna_tidy_rescale$smoothness_mean)
+fna_tidy_rescale$compactness_mean <- rescale_x(fna_tidy_rescale$compactness_mean)
+fna_tidy_rescale$concavity_mean <- rescale_x(fna_tidy_rescale$concavity_mean)
+fna_tidy_rescale$concave.points_mean <- rescale_x(fna_tidy_rescale$concave.points_mean)
+fna_tidy_rescale$symmetry_mean <- rescale_x(fna_tidy_rescale$symmetry_mean)
+fna_tidy_rescale$fractal_dimension_mean <- rescale_x(fna_tidy_rescale$fractal_dimension_mean)
+
+glimpse(fna_tidy_rescale)
+```
+
+
+## Train and Test data
+
+Split the data into train and test 
+```{r}
+set.seed(1997)
+n <- nrow(fna)
+test_indx <- sample.int(n, round(n*0.2))
+train_data <- fna_tidy_rescale[-test_indx,]
+test_data <- fna_tidy_rescale[test_indx,]
+
+glimpse(train_data)
+glimpse(test_data)
+```
+
+
+## Classification Algorithm using Decision Trees method
+
+Defining diagnosis formula
+```{r}
+# Creates formula for diagnosis
+diagnosis_form <- as.formula(diagnosis ~ radius_mean + texture_mean + perimeter_mean
+                             + area_mean + smoothness_mean + compactness_mean +
+                               concavity_mean + concave.points_mean + symmetry_mean
+                             + fractal_dimension_mean)
+```
+
+
+Decision Tree Method (when cp=0)
+```{r}
+set.seed(1997)
+
+# Creates decision tree, where pruning is used to avoid overfitting
+diagnosis_tree_full <- rpart(diagnosis_form, train_data, cp = 0)
+
+# Creates cp of model 
+printcp(diagnosis_tree_full)
+plotcp(diagnosis_tree_full)
+```
+
+Decision Tree Method after pruning 
+```{r}
+set.seed(1997)
+# Creates decision tree
+diagnosis_tree <- rpart(diagnosis_form, train_data, cp = .02)
+plot(as.party(diagnosis_tree))
+
+# Creates predictions for diagnosis using the decision tree with the removal of ID, diagnosis, and diagnosis_binary
+diagnosis_tree_preds <- predict(diagnosis_tree, newdata = test_data[c(-1,-2,-3)], type = "class")
+# Creates Confusion Matrix
+confusionMatrix(diagnosis_tree_preds, test_data$diagnosis, positive ="M")
+```
+
+
+## Classification Algorithm using random forest/ bagging method
+
+Bagging Method Analysis:
+```{r}
+set.seed(1997)
+
+# Creates bagging 
+diagnosis_bag <- randomForest(diagnosis_form, data = train_data, mtry = 10, ntree = 201)
+
+# Creates predictions for diagnosis 
+diagnosis_bag_preds <- predict(diagnosis_bag, newdata = test_data[c(-1,-2,-3)])
+
+# Creates Confusion Matrix
+confusionMatrix(diagnosis_bag_preds, test_data$diagnosis, positive = 'M')
+
+#looking at variable importance
+varImpPlot(diagnosis_bag)
+```
+
+Random Forest Method Anaylsis:
+```{r}
+set.seed(1997)
+
+# Creates various random forest models 
+randomForest(diagnosis_form, data = train_data, mtry = 1, ntree = 201)
+randomForest(diagnosis_form, data = train_data, mtry = 2, ntree = 201)
+randomForest(diagnosis_form, data = train_data, mtry = 3, ntree = 201)
+randomForest(diagnosis_form, data = train_data, mtry = 4, ntree = 201) 
+randomForest(diagnosis_form, data = train_data, mtry = 5, ntree = 201) #best model
+randomForest(diagnosis_form, data = train_data, mtry = 6, ntree = 201)
+randomForest(diagnosis_form, data = train_data, mtry = 7, ntree = 201)
+randomForest(diagnosis_form, data = train_data, mtry = 8, ntree = 201)
+randomForest(diagnosis_form, data = train_data, mtry = 9, ntree = 201)
+```
+
+Best model for Random Forest Method
+```{r}
+set.seed(1997)
+
+# Choose the best random forest model, # note: m = 5
+diagnosis_forest <- randomForest(diagnosis_form, data = train_data, mtry = 5, ntree = 201)
+# Creates predictions for diagnosis using random forest
+diagnosis_forest_preds <- predict(diagnosis_forest, newdata = test_data[c(-1,-2,-3)])
+# Creates Confusion Matrix
+confusionMatrix(diagnosis_forest_preds, test_data$diagnosis, positive = 'M')
+```
+
+
+## Classification Algorithm using Kth Nearest Neighbors (KNN) method
+
+
+```{r}
+set.seed(1997)
+diagnosis_knn3 <- as.factor(knn(train_data[c(-1,-2,-3)], test_data[c(-1,-2,-3)], cl = train_data$diagnosis, k = 3))
+table(diagnosis_knn3, test_data$diagnosis)
+```
+
+
+```{r}
+set.seed(1997)
+diagnosis_knn5 <- knn(train_data[c(-1,-2,-3)], test_data[c(-1,-2,-3)], cl = train_data$diagnosis, k = 5) 
+table(diagnosis_knn5, test_data$diagnosis)
+```
+
+
+```{r}
+set.seed(1997)
+diagnosis_knn7 <- knn(train_data[c(-1,-2,-3)], test_data[c(-1,-2,-3)], cl = train_data$diagnosis, k = 7)
+table(diagnosis_knn7, test_data$diagnosis)
+```
+
+
+```{r}
+set.seed(1997)
+diagnosis_knn9 <- knn(train_data[c(-1,-2,-3)], test_data[c(-1,-2,-3)], cl = train_data$diagnosis, k = 9)
+table(diagnosis_knn9, test_data$diagnosis)
+```
+
+
+```{r}
+set.seed(1997)
+diagnosis_knn11 <- knn(train_data[c(-1,-2,-3)], test_data[c(-1,-2,-3)], cl = train_data$diagnosis, k = 11) # best model
+table(diagnosis_knn11, test_data$diagnosis)
+```
+
+
+```{r}
+set.seed(1997)
+diagnosis_knn13 <- knn(train_data[c(-1,-2,-3)], test_data[c(-1,-2,-3)], cl = train_data$diagnosis, k = 13)
+table(diagnosis_knn13, test_data$diagnosis)
+```
+
+
+```{r}
+set.seed(1997)
+diagnosis_knn17 <- knn(train_data[c(-1,-2,-3)], test_data[c(-1,-2,-3)], cl = train_data$diagnosis, k = 17)
+table(diagnosis_knn17, test_data$diagnosis)
+```
+
+```{r}
+#square root of n model
+set.seed(1997)
+diagnosis_knn24 <- knn(train_data[c(-1,-2,-3)], test_data[c(-1,-2,-3)], cl = train_data$diagnosis, k = 24)
+table(diagnosis_knn24, test_data$diagnosis)
+```
+
+As a result, the best fitted model was when k = 11. 
+
+```{r}
+confusionMatrix(diagnosis_knn11, test_data$diagnosis, positive = 'M')
+```
+
+
+## ROC Curves for All Methods
+
+Decision Tree Method
+```{r}
+set.seed(1997)
+
+diagnosis_tree_rocpreds <- predict(diagnosis_tree, newdata = test_data[c(-1,-2,-3)], type = "prob")
+roc_tree_preds <- prediction(diagnosis_tree_rocpreds[,2], test_data$diagnosis)
+roc_tree_perf <- performance(roc_tree_preds, "tpr", "fpr")
+plot(roc_tree_perf, avg= "threshold", colorize=T, lwd=3, main="ROC curve for Decision Tree")
+```
+
+Bagging Method
+```{r}
+set.seed(1997)
+
+diagnosis_bag_rocpreds <- predict(diagnosis_bag, newdata = test_data[c(-1,-2,-3)], type = "prob")
+roc_bag_preds <- prediction(diagnosis_bag_rocpreds[,2], test_data$diagnosis)
+roc_bag_perf <- performance(roc_bag_preds, "tpr", "fpr")
+plot(roc_bag_perf, avg= "threshold", colorize=T, lwd=3, main="ROC curve for Bagging")
+```
+
+Random Forest Method
+```{r}
+set.seed(1997)
+
+diagnosis_forest_rocpreds <- predict(diagnosis_forest, newdata = test_data[c(-1,-2,-3)], type = "prob")
+roc_forest_preds <- prediction(diagnosis_forest_rocpreds[,2], test_data$diagnosis)
+roc_forest_perf <- performance(roc_forest_preds, "tpr", "fpr")
+plot(roc_forest_perf, avg= "threshold", colorize=T, lwd=3, main="ROC curve for Random Forest")
+```
+
+KNN Method
+```{r}
+set.seed(1997)
+
+diagnosis_knn_prob <- knn(train_data[c(-1,-2,-3)], test_data[c(-1,-2,-3)], cl = train_data$diagnosis_binary, k = 11, prob=TRUE)
+# extracts the probabilities from the KNN method using the attribute function
+prob <- attr(diagnosis_knn_prob, "prob")
+# Since it takes majority voting, we must manually account for benign causes, which are defined as "0"
+diagnosis_knn_rocpreds <- ifelse(diagnosis_knn_prob == "0", 1-prob, prob)
+# plots ROC curve
+roc_knn_preds <- prediction(diagnosis_knn_rocpreds, test_data$diagnosis)
+roc_knn_perf <- performance(roc_knn_preds, "tpr", "fpr")
+plot(roc_knn_perf, avg= "threshold", colorize=T, lwd=3, main="ROC curve for KNN")
+```
+
+Combining plot results of all four methods
+```{r}
+set.seed(1997)
+
+# plot curves on same graph
+plot(roc_tree_perf, col = "orange", main = "ROC Curves of each method", lwd =2) # decision tree, 4
+plot(roc_bag_perf, add=T, col = "green", lwd =2) # bagging, 2 
+plot(roc_forest_perf, add=T, col = "blue", lwd =2) # randomForest, 3
+plot(roc_knn_perf, add=T, avg= "threshold", col = "purple", lwd =2) # knn, 1
+abline(a = 0, b = 1, col = "red", lwd =2, lty=2)
+legend(x = "bottomright",
+       inset = 0.05, 
+       legend = c(" decision tree","bagging","random forest","knn","pure chance"),
+        col = c("orange","blue","green","purple", "red"),
+       lty = c(1,1,1,1,2),
+       lwd = 2,
+       title = "Type of Method"
+       )
+```
+
