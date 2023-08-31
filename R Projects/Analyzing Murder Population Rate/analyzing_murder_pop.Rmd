@@ -1,0 +1,468 @@
+---
+title: "Analyzing Murder Population Rate"
+author: Alejandro Pesantez
+output:
+  pdf_document: default
+  html_document: default
+---
+
+### Introduction:
+
+The objective of this report is to figure out what variables are best at predicting the murder per population rate. This is important because people do not want to be or live in areas where there is a high murder per population rate. Figuring out what variables effect the murder per population rate will give an understanding of what kind of areas have a low or high rate, and can also give ideas on ways to prevent murders which would be beneficial in a multitude of ways. This analysis was done in a step by step process which will be outlined and explained below.
+
+### Step 1:
+
+In step 1 the data was read in and the column names needed to be changed in order for the data to make sense. Once this was done I picked a few variables that I thought were correlated or in other words good predictors of the murder per population rate. Below is a pairs plot which shows if variables are correlated with each other and if they are correlated with the murder per population rate.
+
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)
+data <- read_delim("CommViolPredUnnormalizedData.txt",na = "?", col_names = FALSE,
+                   show_col_types = FALSE)
+column_names <- c("communityName","state","countyCode","communityCode","fold","population"
+                  ,"householdsize","racePctBlack","racePctWhite","racePctAsian","racePctHisp"
+                  ,"medIncome","PctPopUnderPov","PctNotHSGrad","PctUnemployed","murdPerPop")
+data_mod <- data[,c(1:11,18,34,36,38,131)]
+colnames(data_mod) <- column_names
+```
+
+```{r}
+pairs(data_mod[,6:16])
+```
+
+After the pairs plot, the four predictors I felt were most important were put against the murder per population rate in scatter plots. I provided a brief explanation to these plots as well.
+
+
+In the first scatter plot where it shows murder per population versus median income, there seems to be a general trend that as median income increases, the murder per population decreases. Which seems to mean the wealthier the area is, the lower the murder per population rate will be.
+
+```{r, warning=FALSE, messages=FALSE}
+med_inc_plot <- ggplot(data_mod, aes(medIncome,murdPerPop)) + geom_point() + geom_smooth(method=lm)
+suppressMessages(print(med_inc_plot))
+```
+
+In the second scatter plot where it shows murder per population versus the percentage of people not being a high school graduate, there seems to be a general trend that as the percentage of people not being a high school graduate increases the murder per population rate increases. This seems to mean that in areas where people aren't very educated, there will most likely be a higher murder per population rate.
+
+```{r, warning=FALSE, messages=FALSE}
+hs_grad_plot <- ggplot(data_mod, aes(PctNotHSGrad,murdPerPop)) + geom_point() + geom_smooth(method='lm')
+suppressMessages(print(hs_grad_plot))
+```
+
+In the third scatter plot where it shows murder per population versus the percentage of people under poverty, there seems to be a general trend that as the percentage of people under poverty increases the murder per population rate increases. This seems to mean that in areas where there are a lot of people in poverty, there will most likely be a higher murder per population rate.
+
+```{r,warning=FALSE, messages=FALSE}
+pov_plot <- ggplot(data_mod, aes(PctPopUnderPov,murdPerPop)) + geom_point() + geom_smooth(method='lm')
+suppressMessages(print(pov_plot))
+```
+
+In the fourth and final scatter plot where it shows murder per population versus the percentage of people unemployed, there seems to be a general trend that as the percentage of people unemployed increases the murder per population rate increases. This seems to mean that in areas where there are a lot of people unemployed, there will most likely be a higher murder per population rate.
+
+```{r}
+unemp_plot <- ggplot(data_mod, aes(PctUnemployed,murdPerPop)) + geom_point() + geom_smooth(method='lm')
+suppressMessages(print(unemp_plot))
+```
+
+### Step 2:
+
+In step 2 a linear model was created with predictors that I felt were most important in predicting the murder per population rate. These predictors were household size, race percentage Black, race percentage White, race percentage Asian, race percentage Hispanic, median income, percentage of population under poverty, percentage of population without a high school degree, and the percentage of the population that is unemployed. Below is the output and interpretations of the model.
+
+
+```{r}
+mod <- lm(murdPerPop~householdsize+racePctBlack+racePctWhite+
+            racePctAsian+racePctHisp+medIncome+PctPopUnderPov+
+            PctNotHSGrad+PctUnemployed,data_mod)
+summary(mod)
+```
+
+The predictors that are statistically significant in the model, or in other words good predictors of the murder rate per population, are household size, race percentage Black, race percentage White, race percentage Asian, percentage of the population under poverty, and percentage of the population unemployed. The R-squared value is 0.5035 and the adjusted R-squared value is 0.5014 which means that around 50% of the variability observed in the murder per population rate is explained by the regression model. I would say that this does match my intuition since I didn't think all of the predictors would be significant but definitely most of them. The variables that increase the murder population rate are race percentage Black, median income, percentage of the population under poverty, percentage of population without high school degree, and percentage of the population unemployed.
+
+### Step 3:
+
+In step 3 the process of variable selection was done. The step AIC and fast backward variable selection methods were used.
+
+The first method that was used was fast backward variable selection method. This method uses the fitted complete model and computes approximate Wald statistics by computing conditional (restricted) maximum likelihood estimates assuming multivariate normality of estimates. Which in short means, it tries a bunch of different models until it finds the model with the highest predictive power. We also made the sls .05 which just means the significance level (p-value) a variable needs to stay in the model has to meet the .05 threshold.
+
+```{r, warning=FALSE,message=FALSE}
+library(rms)
+ols.mod <- ols(murdPerPop~householdsize+racePctBlack+racePctWhite+
+            racePctAsian+racePctHisp+medIncome+PctPopUnderPov+
+            PctNotHSGrad+PctUnemployed,data_mod)
+fastbw(ols.mod, rule = "p", sls = 0.05)
+```
+
+As you can see from the output above, this method chose to keep household size, race percentage Black, race percentage White, race percentage Asian, and the percentage of people unemployed in the model. The output of the new model is given below.
+
+```{r, warning=FALSE,message=FALSE}
+mod.fastbw <- lm(murdPerPop~householdsize+racePctBlack+racePctWhite+
+                   racePctAsian+PctUnemployed, data_mod)
+summary(mod.fastbw)
+```
+
+Looking at the output of the new model, you can see that all of the variables are now statistically significant, however the adjusted r-squared went down by .0009. We then ran a second variable selection method called step AIC which just performs step wise model selection by AIC. Which means that it looks at the model's AIC and removes variables until the model achieves the best possible AIC.
+
+```{r, warning=FALSE,message=FALSE}
+library(MASS)
+aic_result <- stepAIC(mod)
+aic_result$anova
+```
+
+As you can see above the step AIC model chose to remove 3 variables. This is different than what the fast backward variable selection gave us. This time the variables included in the model are household size, race percentage Black, race percentage White, race percentage Asian, percentage of population under poverty, and percentage of population unemployed. Below is the output of the new model.
+
+```{r, warning=FALSE,message=FALSE}
+mod.aic <- lm(murdPerPop ~ householdsize + racePctBlack + racePctWhite + racePctAsian
+              + PctPopUnderPov + PctUnemployed, data_mod)
+summary(mod.aic)
+```
+
+
+As seen above the adjusted R-squared is higher in this model than both the original and fast backward variable selection models. I would say that this matched my intuition because the step AIC method just removed the non-statistically significant variables from the original model, which in turn gave a higher adjusted r-squared, while the fast backward variable selection method removed one more variable than the step AIC method did and got a lower adjusted r-squared since it removed a statistically significant variable. 
+
+The new step AIC model has an adjusted r-squared that is higher by .0005 than the original model from step2.
+
+With this being the case the new model that has removed the three predictors that weren't significant from the step AIC variable selection method will be used.
+
+### Step 4:
+
+In step 4 diagnostics of the model were done. Below is a diagnostic plot, q-q plot, and lagged residual plot to check if the assumptions of a linear regression model are upheld.
+
+The first plot shown is the diagnostic plot. A diagnostic plot has the fitted values of the model on the x-axis, and the residuals on the y-axis. When looking at the plot I do see some bad patterns that could be examples of model violations, that being said we can say that for the diagnostic plot the assumption of constant error variance is most likely not upheld here. In order to fix this we can transform our data later on in the analysis.
+
+```{r}
+plot(mod.aic$fitted.values,mod.aic$residuals)
+```
+
+The next plot shown is the Q-Q plot. The Q-Q plot shows the sample quantities on the y-axis and the theoretical quantities on the x-axis. According to the Q-Q plot it does not seem like the assumption of normal errors is upheld since the line isn't straight, and there are some clear outliers influencing the shape of the errors. Since the line isn't straight and instead curved, this means that something is most likely skewing the data. Again we will look more into this further on in the analysis.
+
+```{r}
+qqnorm(residuals(mod.aic))
+qqline(mod.aic$residuals)
+```
+
+The last plot that is shown is the lagged residual plot. The lag residual plot works by plotting each residual value versus the value of the successive residual. In the lag residual plot below it seems that there is a pattern and the points seem to form a diamond shape. Since this is the case the assumption of uncorrelated errors seems to not be upheld since if they were uncorrelated there would be a random scatter of points above and below the e = 0 line, which in this example does not seem to be the case.
+
+```{r}
+n <- length(residuals(mod.aic))
+plot(tail(residuals(mod.aic),n-1) ~ head(residuals(mod.aic),n-1),
+     xlab=expression(hat(epsilon)[i]),
+     ylab=expression(hat(epsilon)[i+1]))
+abline(h=0,v=0,col=grey(0.75))
+```
+
+### Step 5:
+
+In step 5, an analysis of the outliers was done. The three methods of detecting outliers that were performed were the cooks distance method, standardize residuals method, and hat value method.
+
+The first method done was looking at cooks distance. Cook's distance is an estimate of the influence of a data point. It takes into account both the leverage and residual of each observation. Cook's Distance is a summary of how much a regression model changes when the ith observation is removed. So once we have all of the cook's distances for each of the observations, it is then put up against a threshold created by the f statistic. We make the f probability .5 so it's 50% and if the cooks distance surpasses this f threshold it is considered an outlier. As you can see below none of the observations passed the threshold which means this method detected zero outliers.
+
+```{r}
+n <- dim(model.matrix(mod.aic))[1]
+p <- dim(model.matrix(mod.aic))[2]
+num_df <- p
+den_df <- n - p
+Fthresh <- qf(0.5, num_df, den_df)
+cook_out <- which(cooks.distance(mod.aic) > Fthresh)
+length(cook_out)
+```
+
+The next method looked at was the standardized residuals method. In this method you standardize the residuals and if an observation is above 3 then that observation is considered an outlier. As you can see below this method detected 31 outliers.
+
+```{r}
+stand_out <- which(rstandard(mod.aic) > 3)
+length(unique(stand_out))
+```
+
+The last method looked at was the hat value method. In this method you get the hat values from the model and create a hat threshold that is the number of parameters multiplied by 2, then divided by the number of observations. If the hat value passes the threshold then it is considered an outlier. Below you can see that this method detected 229 outliers.
+
+```{r}
+h_i <- hatvalues(mod.aic)
+hat_thresh <- (2*p)/n
+hat_out <- which(h_i > hat_thresh)
+length(unique(hat_out))
+```
+
+All of the three different methods gave a different amount of outliers. Cook's method detected 0, the standardized residual method detected 31, and the hat value method detected 229. Since this is the case I decided to not remove any outliers. This is because in real life it's unrealistic to have a perfect pattern, and given that there was a method that detected 0 outliers I decided to keep all the observations so the model would be more realistic. However, in the next step I try to transform the data to minimalize the effects of the outliers that are still present.
+
+### Step 6:
+
+In step 6, the data is transformed to see if I can improve the model and fix our model assumptions. As seen below when a Breusch-Pagan test is run on the current model, the model assumption that the errors having constant variance is not upheld since the p-value is statistically significant. Since this is the case a box-cox and yeo-johnson transformation was done.
+
+```{r, message=FALSE, warning=FALSE}
+library(lmtest)
+bptest(mod.aic)
+```
+
+To begin the transformations, I started with the yeo-johnson transformation. This transformation is typically done on the outcome variable using the residuals for a statistical model. Here, a simple null model is used to apply the transformation to the predictor variables individually. This can have the effect of making the variable distributions more symmetric. 
+
+At the start of the yeo-johnson transformation I created a train and test data set. I did this so I can train the model on a random 80% of the original data and then test the model on a random 20% of the original data. 
+
+```{r}
+n <- nrow(data_mod)
+set.seed(1842)
+test_index <- sample.int(n,size=round(0.2*n))
+train_df <- data_mod[-test_index,]
+test_df <- data_mod[test_index,]
+```
+
+Below is the step AIC model using the newly created training data set.
+
+```{r, message=FALSE, warning=FALSE}
+library(modeldata)
+library(recipes)
+mod.train <- recipe(murdPerPop ~ householdsize + racePctBlack + racePctWhite + racePctAsian
+                    + PctPopUnderPov + PctUnemployed, train_df)
+```
+
+Below shows how the data is transformed. As you can see it uses the test and training data set to figure out how to best scale the data in order to get better predictive results and normalize the outcome variable. You can tell that when you look at the murder per population rate variable in the before plot, that it is very much skewed. However after the yeo-johnson transformation you can see that the murder per population rate variable is far less skewed and beginning to look more normal.
+
+```{r}
+yj_transform <- step_YeoJohnson(mod.train,  all_numeric())
+yj_estimates <- prep(yj_transform, training = train_df)
+yj_te <- bake(yj_estimates, test_df)
+plot(density(test_df$murdPerPop), main = "before")
+```
+
+```{r}
+plot(density(yj_te$murdPerPop), main = "after")
+```
+
+The new step AIC model with the newly transformed data is given below. When the Breusch-Pagan test is done on the model you can see that the p-value significantly increases which means that the model assumption that the errors having constant variance is upheld! 
+
+```{r}
+mod.new <- lm(murdPerPop ~ householdsize + racePctBlack + racePctWhite + racePctAsian
+              + PctPopUnderPov + PctUnemployed, yj_te)
+bptest(mod.new)
+```
+
+You can also see from the diagnostic plot below that the points are much more scattered and less cluttered now when compared to the original data in step 4 but it could still use some more work. Since this is the case a boxcox transformation was done to see if it could improve the model any better.
+
+```{r}
+plot(mod.new$fitted.values, mod.new$residuals)
+```
+
+As seen below a box-cox transformation was formed. The box-cox transformation transforms our data so that it closely resembles a normal distribution. Unfortunately it can't handle the response variable being negative unlike the yeo-johnson method. This is why I had to put a plus one after the response variable in the model. The Box-cox method finds an optimal transformation index, denoted by lambda, and it is used when we need to transform the response variable to improve model fit and correct violation of model assumptions. As you can see from the plot below, 0 is not in the 95% confidence interval for lambda. This means that when transforming the response variable in the model we put the response variable to the lambda power.
+
+```{r}
+mod.log <- lm(murdPerPop+1 ~ householdsize + racePctBlack + racePctWhite + racePctAsian
+              + PctPopUnderPov + PctUnemployed, data_mod)
+bc <- boxcox(mod.log, plotit=T)
+lambda <- bc$x[which.max(bc$y)]
+```
+
+Below is the newly created model using the transformed response variable. Then another Breusch-Pagan test was done on this model. As you can see this model has a much lower p-value than the model using the yeo-johnson transformed data. In fact this model still fails the Breusch-Pagan test and the model assumption that the errors having constant variance is still not upheld. 
+
+```{r}
+mod.box <- lm((murdPerPop+1)^lambda ~ householdsize + racePctBlack + racePctWhite + racePctAsian
+              + PctPopUnderPov + PctUnemployed, data_mod)
+bptest(mod.box)
+```
+
+Since the model with the yeo-johnson transformed data was able to uphold the model assumption that the errors having constant variance, I decided to use this model going forward.
+
+### Step 7:
+
+In step 7, I report inferences as well as make predictions using my final model.In the final model below you can see that only three variables are statistically significant when alpha equals 0.5. Those variables are household size, race percentage white, and percentage of population under poverty. The variables that increase the murder per population rate as they increase are race percentage Black, percentage of population under poverty, and percentage of population unemployed. The variables that decrease the murder per population rate as they increase are household size, race percentage White, and race percentage Asian.
+
+```{r}
+summary(mod.new)$coefficients[,c(1,4)]
+```
+
+Below are the final multiple and adjusted r-squared values. The final multiple r-squared ended up being 0.4428577, and the final adjusted r-squared ended up being 0.4351906. I'm pleased with these results because that means that around 43-44% of the variability observed in the murder per population rate is explained by the regression model.
+
+```{r}
+summary(mod.new)$r.squared
+summary(mod.new)$adj.r.squared 
+```
+
+I then wanted to look at a 95% confidence interval for the slope of household size, given that I felt that was the most interesting and one of the most important variables of the model since it's statistically significant and has a larger slope than the rest. However, before I interpret the interval I had to re-scale the numbers back to the original scale in order to be able to actually interpret the slope. This can be seen below as well.
+
+```{r}
+tidy(yj_estimates, number = 1)
+```
+
+As seen below we are 95% confident that the slope of household size is be between -2.352696 and -1.239684. 
+
+```{r, message=FALSE, warning=FALSE}
+library(VGAM)
+confint(mod.new,'householdsize',level = .95)
+yeo.johnson(-55.19678,-2.57579545, inverse = TRUE)
+yeo.johnson(-8.529619,-2.57579545, inverse = TRUE)
+```
+
+I then wanted to figure out what the murder per population rate would be if I used the median of all the variables. In order to do this I made a 95% confidence interval of what the murder per population rate would be when using the median of all the predictors. Below you can see that the 95% confidence interval for the prediction of the mean of the murder per population rate using the medians of the predictor variables should lie in between 1.307664 and 1.737758
+
+```{r}
+x <- model.matrix(mod.new)
+x0 <- apply(x,2,median)
+y0 <- sum(x0*coef(mod.new))
+predict(mod.new,new=data.frame(t(x0)),interval="confidence",
+        level = .95)
+yeo.johnson(0.7505812,-0.26327834, inverse = TRUE)
+yeo.johnson(0.884673,-0.26327834, inverse = TRUE)
+```
+
+Lastly, I wanted to do the same thing as I did above however, instead of using a 95% confidence interval, I wanted to use a 95% prediction interval. As seen below, the 95% confidence interval for the prediction of the true value of the murder per population rate using the median of the predictors lies between -0.380429 and 20.75205
+
+```{r}
+predict(mod.new,new=data.frame(t(x0)),interval="prediction",
+        level = .95)
+
+yeo.johnson(-0.4747061,-0.26327834, inverse = TRUE)
+yeo.johnson(2.10996,-0.26327834, inverse = TRUE)
+```
+
+### Conclusion:
+
+In conclusion you can see that there are many factors that impact the murder per population rate. In our final model the only statistically significant factors were household size, race percentage white, and percentage of population under poverty. Household size and race percentage both had negative slopes which means that as the household size and the percentage of white people in an area increases, the murder per population rate should decrease. While the percentage of population under poverty had a positive slope, which means that as the percentage of population under poverty increases in an area, the murder per population rate should increase as well. This means that from this analysis we can say that in areas where there are majority white people and the house hold sizes are usually on the bigger side, there should be less murders than normal. While if you live in an area where the percentage of the population under poverty is high, then you can expect there to be more murders than normal. This information can help communities that deal with a lot of murders to see in what ways they can improve by seeing what increase and decreases the murder rate. This also helps people that are trying to avoid being murdered by avoiding places where there is a high percentage of the population under poverty.
+
+### Appendix:
+
+```{r, eval=FALSE}
+###Step 1
+
+library(tidyverse)
+data <- read_delim("CommViolPredUnnormalizedData.txt",na = "?", col_names = FALSE,
+                   show_col_types = FALSE)
+column_names <- c("communityName","state","countyCode","communityCode","fold","population"
+                  ,"householdsize","racePctBlack","racePctWhite","racePctAsian","racePctHisp"
+                  ,"medIncome","PctPopUnderPov","PctNotHSGrad","PctUnemployed","murdPerPop")
+data_mod <- data[,c(1:11,18,34,36,38,131)]
+colnames(data_mod) <- column_names
+
+pairs(data_mod[,6:16])
+
+med_inc_plot <- ggplot(data_mod, aes(medIncome,murdPerPop)) + geom_point() + geom_smooth(method=lm)
+suppressMessages(print(med_inc_plot))
+
+hs_grad_plot <- ggplot(data_mod, aes(PctNotHSGrad,murdPerPop)) + geom_point() + geom_smooth(method='lm')
+suppressMessages(print(hs_grad_plot))
+
+pov_plot <- ggplot(data_mod, aes(PctPopUnderPov,murdPerPop)) + geom_point() + geom_smooth(method='lm')
+suppressMessages(print(pov_plot))
+
+unemp_plot <- ggplot(data_mod, aes(PctUnemployed,murdPerPop)) + geom_point() + geom_smooth(method='lm')
+suppressMessages(print(unemp_plot))
+
+###Step 2
+
+mod <- lm(murdPerPop~householdsize+racePctBlack+racePctWhite+
+            racePctAsian+racePctHisp+medIncome+PctPopUnderPov+
+            PctNotHSGrad+PctUnemployed,data_mod)
+summary(mod)
+
+###Step 3
+
+library(rms)
+ols.mod <- ols(murdPerPop~householdsize+racePctBlack+racePctWhite+
+            racePctAsian+racePctHisp+medIncome+PctPopUnderPov+
+            PctNotHSGrad+PctUnemployed,data_mod)
+fastbw(ols.mod, rule = "p", sls = 0.05)
+
+mod.fastbw <- lm(murdPerPop~householdsize+racePctBlack+racePctWhite+
+                   racePctAsian+PctUnemployed, data_mod)
+summary(mod.fastbw)
+
+library(MASS)
+aic_result <- stepAIC(mod)
+aic_result$anova
+
+mod.aic <- lm(murdPerPop ~ householdsize + racePctBlack + racePctWhite + racePctAsian
+              + PctPopUnderPov + PctUnemployed, data_mod)
+summary(mod.aic)
+
+###Step 4
+plot(mod.aic$fitted.values,mod.aic$residuals)
+
+qqnorm(residuals(mod.aic))
+qqline(mod.aic$residuals)
+
+n <- length(residuals(mod.aic))
+plot(tail(residuals(mod.aic),n-1) ~ head(residuals(mod.aic),n-1),
+     xlab=expression(hat(epsilon)[i]),
+     ylab=expression(hat(epsilon)[i+1]))
+abline(h=0,v=0,col=grey(0.75))
+
+###Step 5
+
+n <- dim(model.matrix(mod.aic))[1]
+p <- dim(model.matrix(mod.aic))[2]
+num_df <- p
+den_df <- n - p
+Fthresh <- qf(0.5, num_df, den_df)
+cook_out <- which(cooks.distance(mod.aic) > Fthresh)
+length(cook_out)
+
+stand_out <- which(rstandard(mod.aic) > 3)
+length(unique(stand_out))
+
+
+h_i <- hatvalues(mod.aic)
+hat_thresh <- (2*p)/n
+hat_out <- which(h_i > hat_thresh)
+length(unique(hat_out))
+
+###Step 6
+
+library(lmtest)
+bptest(mod.aic)
+
+n <- nrow(data_mod)
+set.seed(1842)
+test_index <- sample.int(n,size=round(0.2*n))
+train_df <- data_mod[-test_index,]
+test_df <- data_mod[test_index,]
+
+library(modeldata)
+library(recipes)
+mod.train <- recipe(murdPerPop ~ householdsize + racePctBlack + racePctWhite + racePctAsian
+                    + PctPopUnderPov + PctUnemployed, train_df)
+
+yj_transform <- step_YeoJohnson(mod.train,  all_numeric())
+yj_estimates <- prep(yj_transform, training = train_df)
+yj_te <- bake(yj_estimates, test_df)
+plot(density(test_df$murdPerPop), main = "before")
+
+plot(density(yj_te$murdPerPop), main = "after")
+
+mod.new <- lm(murdPerPop ~ householdsize + racePctBlack + racePctWhite + racePctAsian
+              + PctPopUnderPov + PctUnemployed, yj_te)
+bptest(mod.new)
+
+plot(mod.new$fitted.values, mod.new$residuals)
+
+mod.log <- lm(murdPerPop+1 ~ householdsize + racePctBlack + racePctWhite + racePctAsian
+              + PctPopUnderPov + PctUnemployed, data_mod)
+bc <- boxcox(mod.log, plotit=T)
+lambda <- bc$x[which.max(bc$y)]
+
+mod.box <- lm((murdPerPop+1)^lambda ~ householdsize + racePctBlack + racePctWhite + racePctAsian
+              + PctPopUnderPov + PctUnemployed, data_mod)
+bptest(mod.box)
+
+###Step 7
+
+summary(mod.new)$coefficients[,c(1,4)]
+
+summary(mod.new)$r.squared
+summary(mod.new)$adj.r.squared 
+
+tidy(yj_estimates, number = 1)
+
+library(VGAM)
+confint(mod.new,'householdsize',level = .95)
+yeo.johnson(-55.19678,-2.57579545, inverse = TRUE)
+yeo.johnson(-8.529619,-2.57579545, inverse = TRUE)
+
+x <- model.matrix(mod.new)
+x0 <- apply(x,2,median)
+y0 <- sum(x0*coef(mod.new))
+predict(mod.new,new=data.frame(t(x0)),interval="confidence",
+        level = .95)
+yeo.johnson(0.7505812,-0.26327834, inverse = TRUE)
+yeo.johnson(0.884673,-0.26327834, inverse = TRUE)
+
+predict(mod.new,new=data.frame(t(x0)),interval="prediction",
+        level = .95)
+
+yeo.johnson(-0.4747061,-0.26327834, inverse = TRUE)
+yeo.johnson(2.10996,-0.26327834, inverse = TRUE)
+```
+
+
