@@ -1,0 +1,115 @@
+----------------------------------------------------------------
+Table Summary
+--------------------------------------------------------------------------------
+ 
+Survey:           ACS 2020 (5-Year Estimates)
+Dataset:          Social Explorer Tables: ACS 2020 (5-Year Estimates)
+Tables:
+
+      1. Total Population
+         Universe:  Total Population
+         Name:      A00001
+         Variables:
+            A00001_1:   Total Population
+
+
+      2. Population Density (Per Sq. Mile)
+         Universe:  Total Population
+         Name:      A00002
+         Variables:
+            A00002_1:   Total Population
+            A00002_2:   Population Density (Per Sq. Mile)
+            A00002_3:   Area (Land)
+
+
+      3. Sex
+         Universe:  Total Population
+         Name:      A02001
+         Variables:
+            A02001_1:   Total Population:
+            A02001_2:      Male
+            A02001_3:      Female
+
+
+      4. Age
+         Universe:  Total Population
+         Name:      A01001
+         Variables:
+            A01001_1:   Total Population:
+            A01001_2:      Under 5 Years
+            A01001_3:      5 to 9 Years
+            A01001_4:      10 to 14 Years
+            A01001_5:      15 to 17 Years
+            A01001_6:      18 to 24 Years
+            A01001_7:      25 to 34 Years
+            A01001_8:      35 to 44 Years
+            A01001_9:      45 to 54 Years
+            A01001_10:      55 to 64 Years
+            A01001_11:      65 to 74 Years
+            A01001_12:      75 to 84 Years
+            A01001_13:      85 Years and Over
+
+
+      5. Race
+         Universe:  Total Population
+         Name:      A03001
+         Variables:
+            A03001_1:   Total Population:
+            A03001_2:      White Alone
+            A03001_3:      Black or African American Alone
+            A03001_4:      American Indian and Alaska Native Alone
+            A03001_5:      Asian Alone
+            A03001_6:      Native Hawaiian and Other Pacific Islander Alone
+            A03001_7:      Some Other Race Alone
+            A03001_8:      Two or More Races
+
+
+      6. Households by Household Type
+         Universe:  Households
+         Name:      A10008
+         Variables:
+            A10008_1:   Households:
+            A10008_2:      Family Households:
+            A10008_3:         Married-Couple Family
+            A10008_4:         Other Family:
+            A10008_5:            Male Householder, No Wife Present
+            A10008_6:            Female Householder, No Husband Present
+            A10008_7:      Nonfamily Households:
+            A10008_8:         Male Householder
+            A10008_9:         Female Householder
+
+
+      7. Median Household Income (In <DollarYear> Inflation Adjusted Dollars)
+         Universe:  Households
+         Name:      A14006
+         Variables:
+            A14006_1:   Median Household Income (In 2020 Inflation Adjusted Dollars)
+
+
+      8. Housing Units
+         Universe:  Housing units
+         Name:      A10001
+         Variables:
+            A10001_1:   Housing Units
+
+
+      9. Tenure
+         Universe:  Occupied Housing Units
+         Name:      A10060
+         Variables:
+            A10060_1:   Occupied Housing Units:
+            A10060_2:      Owner Occupied
+            A10060_3:      Renter Occupied
+
+
+      10. Ratio of Income in 2020 to Poverty Level (Summarized - top-coded at 2.00)
+          Universe:  Population for whom poverty status Is determined
+          Name:      B13004
+          Variables:
+             B13004_1:   Population for Whom Poverty Status Is Determined:
+             B13004_2:      Under 1.00 (Doing Poorly)
+             B13004_3:      1.00 to 1.99 (Struggling)
+             B13004_4:      Under 2.00 (Poor or Struggling)
+             B13004_5:      2.00 and Over (Doing Ok)
+
+
